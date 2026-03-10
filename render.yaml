@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: soulx-livekit-avatar
+    runtime: python
+    buildCommand: "pip install -r requirements.txt && pip install -r requirements_pipecat.txt"
+    startCommand: "python soulx_conversational_bot.py"
+    envVars:
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: SOULX_MODEL_TYPE
+        value: lite
+      - key: SOULX_CKPT_DIR
+        value: ./models/SoulX-FlashHead-1_3B
+      - key: SOULX_WAV2VEC_DIR
+        value: ./models/wav2vec2-base-960h
