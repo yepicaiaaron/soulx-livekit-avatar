@@ -1,77 +1,136 @@
 import asyncio
+import collections
 import numpy as np
 from typing import Optional
 
 from pipecat.frames.frames import (
     AudioRawFrame,
-    RawImageFrame,
+    OutputImageRawFrame,
     Frame,
-    SystemFrame
 )
-from pipecat.services.base_service import BaseService
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from loguru import logger
 
-class SoulXFlashHeadService(BaseService):
+from flash_head.inference import get_audio_embedding, run_pipeline
+
+
+class SoulXFlashHeadService(FrameProcessor):
     """
-    A custom Pipecat service that receives AudioRawFrames (from a TTS engine like Cartesia),
-    buffers them, streams them into the SoulX-FlashHead inference pipeline, 
-    and yields RawImageFrames (video frames) frame-by-frame.
+    A custom Pipecat service that receives AudioRawFrames (from a TTS engine),
+    buffers them using a sliding window, streams them into the SoulX-FlashHead
+    inference pipeline, and yields OutputImageRawFrames (video frames) frame-by-frame.
     """
-    
-    def __init__(self, pipeline, sample_rate: int = 16000, **kwargs):
+
+    def __init__(self, pipeline, infer_params: dict, **kwargs):
         super().__init__(**kwargs)
         self._pipeline = pipeline
-        self._sample_rate = sample_rate
-        self._audio_buffer = bytearray()
-        
-        # SoulX typically needs a specific chunk size of audio to generate a video frame slice
-        # (e.g., 20ms of audio -> 1 frame at 25 fps, though exact sizes depend on the model slice_len)
-        self._bytes_per_chunk = int(sample_rate * 2) # Assuming 16-bit PCM (2 bytes per sample) 
-        
-        # We need to know how many bytes to accumulate before doing a forward pass
-        # This is a placeholder for the actual stride length in bytes
-        self._chunk_size = 4000 
-        logger.info("Initialized SoulX-FlashHead Pipecat Service")
+        self._infer_params = infer_params
 
-    async def process_frame(self, frame: Frame):
-        if isinstance(frame, AudioRawFrame):
-            # 1. Buffer the incoming TTS audio
-            self._audio_buffer.extend(frame.audio)
-            
-            # 2. Check if we have enough audio to do an inference step
-            while len(self._audio_buffer) >= self._chunk_size:
-                # Extract the chunk
-                chunk_bytes = self._audio_buffer[:self._chunk_size]
-                self._audio_buffer = self._audio_buffer[self._chunk_size:]
-                
-                # Convert 16-bit PCM bytes to float32 numpy array for SoulX
-                audio_array = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                
-                # 3. Stream into SoulX-FlashHead in-memory pipeline
-                # This runs the neural network forward pass on the audio chunk
-                try:
-                    # run_pipeline yields video tensors (e.g., shape [H, W, C])
-                    video_tensors = await asyncio.to_thread(self._pipeline.process_audio_chunk, audio_array)
-                    
-                    # 4. Yield generated frames down the Pipecat pipeline instantly
-                    for v_frame in video_tensors:
-                        # Convert to bytes
-                        frame_bytes = v_frame.tobytes()
-                        # Assuming output is 512x512 RGB
-                        image_frame = RawImageFrame(
-                            pixels=frame_bytes,
-                            size=(512, 512),
-                            format="RGB"
-                        )
-                        await self.push_frame(image_frame)
-                        
-                except Exception as e:
-                    logger.error(f"Error during SoulX inference step: {e}")
-                    
-            # We also pass the audio frame along so the user hears the TTS
-            await self.push_frame(frame)
-            
-        elif isinstance(frame, SystemFrame):
-            await self.push_frame(frame)
+        # Audio parameters
+        self._sample_rate = infer_params['sample_rate']
+        self._tgt_fps = infer_params['tgt_fps']
+        self._frame_num = infer_params['frame_num']
+        self._motion_frames_num = infer_params['motion_frames_num']
+
+        # Number of new frames generated per inference call
+        self._slice_len = self._frame_num - self._motion_frames_num
+
+        # Number of audio samples needed per inference slice
+        self._audio_slice_len = self._slice_len * self._sample_rate // self._tgt_fps
+
+        # Sliding window audio buffer
+        self._cached_audio_duration = infer_params['cached_audio_duration']
+        self._cached_audio_length = self._sample_rate * self._cached_audio_duration
+        self._audio_buffer = collections.deque(
+            [0.0] * self._cached_audio_length,
+            maxlen=self._cached_audio_length
+        )
+
+        # Indices for audio embedding window
+        self._audio_end_idx = self._cached_audio_duration * self._tgt_fps
+        self._audio_start_idx = self._audio_end_idx - self._frame_num
+
+        # Accumulator for incoming audio samples between inference calls
+        self._audio_accumulator = []
+        self._accumulated_samples = 0
+
+        logger.info("SoulXFlashHeadService initialized")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Process incoming frames from the pipeline."""
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
+            await self._handle_audio_frame(frame, direction)
         else:
-            await self.push_frame(frame)
+            await self.push_frame(frame, direction)
+
+    async def _handle_audio_frame(self, frame: AudioRawFrame, direction: FrameDirection):
+        """Buffer audio and trigger video generation when enough samples are ready."""
+        # Convert 16-bit PCM bytes to float32 numpy array
+        audio_data = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float32) / 32768.0
+
+        self._audio_accumulator.append(audio_data)
+        self._accumulated_samples += len(audio_data)
+
+        while self._accumulated_samples >= self._audio_slice_len:
+            # Concatenate and extract one slice
+            all_audio = np.concatenate(self._audio_accumulator)
+            audio_slice = all_audio[:self._audio_slice_len]
+
+            # Keep the remainder for the next iteration
+            remaining = all_audio[self._audio_slice_len:]
+            self._audio_accumulator = [remaining] if len(remaining) > 0 else []
+            self._accumulated_samples = len(remaining)
+
+            # Advance the sliding window buffer
+            self._audio_buffer.extend(audio_slice.tolist())
+
+            # Run inference and push resulting video frames
+            try:
+                video_frames = await self._generate_video_frames()
+                for v_frame in video_frames:
+                    h, w = v_frame.shape[:2]
+                    frame_bytes = v_frame.tobytes()
+                    image_frame = OutputImageRawFrame(
+                        image=frame_bytes,
+                        size=(w, h),
+                        format="RGB"
+                    )
+                    await self.push_frame(image_frame, direction)
+            except Exception as e:
+                logger.error(f"Error during SoulX inference: {e}")
+
+        # Pass the original audio frame downstream so the user hears the TTS
+        await self.push_frame(frame, direction)
+
+    async def _generate_video_frames(self) -> list:
+        """Run SoulX inference in a thread pool and return a list of HxWxC uint8 arrays."""
+        audio_array = np.array(self._audio_buffer)
+
+        # Step 1: encode audio into embedding
+        audio_embedding = await asyncio.to_thread(
+            get_audio_embedding,
+            self._pipeline,
+            audio_array,
+            self._audio_start_idx,
+            self._audio_end_idx
+        )
+
+        # Step 2: run the generative pipeline
+        video_tensor = await asyncio.to_thread(
+            run_pipeline,
+            self._pipeline,
+            audio_embedding
+        )
+
+        # Step 3: convert tensor frames to numpy arrays
+        frames = []
+        for i in range(video_tensor.shape[0]):
+            frame_np = video_tensor[i].cpu().numpy().astype(np.uint8)
+            # Ensure HWC layout
+            if frame_np.ndim == 3 and frame_np.shape[0] == 3:
+                frame_np = np.transpose(frame_np, (1, 2, 0))
+            frames.append(frame_np)
+
+        return frames
