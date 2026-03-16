@@ -21,7 +21,13 @@ Here is our current progress toward building a sub-700ms diffusion video system:
 - ⏳ **TensorRT Compilation:** Compile PyTorch graph to NVIDIA TensorRT (Expected latency reduction: ~150ms).
 - ⏳ **Wav2Vec2 Concurrency:** Asynchronous micro-chunking for audio extraction (Expected latency reduction: ~30ms).
 - ⏳ **FP8/INT8 Quantization:** Quantize model weights via `bitsandbytes` (Expected rendering speedup: ~30%).
-- ⏳ **Full Autonomous Agent:** Pipe Deepgram ASR -> OpenAI LLM -> ElevenLabs TTS directly into transport.
+- ⚠️ **Full Autonomous Agent (ElevenLabs Agents API):** Attempted direct WebSocket integration with ElevenLabs Agents API. Currently blocked by undocumented `1008 policy violation` errors when sending base64 `user_audio_chunk` payloads. See `feat-elevenlabs-agent` branch for isolated test scripts and integration attempts.
+
+### 🧪 Experimental Branch: ElevenLabs Agents Integration
+This branch (`feat-elevenlabs-agent`) contains experimental scripts for integrating the ElevenLabs Conversational AI Agents API natively via WebSockets.
+- `elevenlabs_agent_sync.py`: Full pipeline (LiveKit Mic -> ElevenLabs Agent -> SoulX Video).
+- `test_elevenlabs_only.py`: Isolated audio pipeline (LiveKit Mic -> ElevenLabs Agent -> LiveKit Speaker).
+- **Status:** Failing. The ElevenLabs WebSocket API forcefully disconnects with `1008 (policy violation) Invalid message received` when transmitting 16kHz 16-bit PCM base64 audio chunks.
 
 ## 🛠 Prerequisites & Setup
 
