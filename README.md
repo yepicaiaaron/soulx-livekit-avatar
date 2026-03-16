@@ -1,19 +1,32 @@
 # SoulX Real-Time WebRTC Avatar
 
-Welcome to the **SoulX Real-Time WebRTC Avatar** project! This repository demonstrates how to build a hyper-fast, ultra-low latency real-time conversational AI avatar pipeline using the **SoulX-FlashHead** model and **LiveKit** WebRTC.
+Welcome to the **SoulX Real-Time WebRTC Avatar** project! This repository demonstrates a hyper-fast, ultra-low latency real-time conversational AI avatar pipeline. 
 
-By combining the power of PyTorch `Torchinductor` JIT compilation, background asynchronous processing, and LiveKit's WebRTC transport, we have achieved a fully continuous, perfectly synced audio-to-video pipeline with a latency of just **~1.0 - 1.5 seconds** on a single NVIDIA A100 GPU!
+**Acknowledgments:** This project is built entirely on top of the incredible **SoulX-FlashHead** architecture. All credit for the base model, distillation techniques, and core inference engine goes to the researchers at Soul-AILab. You can find their original repository and paper here: [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead). Our work focuses strictly on optimizing their engine for continuous WebRTC streaming and sub-second latency.
 
-## 🚀 Features
-- **Real-Time Lip Sync:** Generates perfectly synced video frames directly from incoming WebRTC audio (e.g., your microphone or an LLM/TTS stream).
-- **Ultra-Low Latency:** Renders a 1.28s audio chunk in just ~0.25s using the SoulX `Lite` model.
-- **Continuous Streaming:** The avatar idles gracefully and responds instantly to audio without dropping connections or timing out.
-- **Dynamic Animation Intensity:** Customize the responsiveness of the avatar's facial expressions on the fly by tweaking the audio embedding multiplier.
+## 🎯 Project Roadmap & Status
+
+Our ultimate goal is to achieve a full end-to-end conversational latency (including ASR, LLM, TTS, and video rendering) of **under 600 milliseconds**. 
+
+Here is our current progress toward building a sub-700ms diffusion video system:
+
+- [x] **Continuous Streaming:** Avatar idles gracefully and responds instantly to audio without dropping connections.
+- [x] **WebRTC Integration:** Full duplex audio-in/video-out via LiveKit and Pipecat.
+- [x] **JIT Pre-Warming:** Bypassed 2-minute PyTorch graph compilation delays via dummy audio passes.
+- [x] **Sub-1.5s Rendering:** Achieved ~1.0-1.5s latency on a single NVIDIA A100 using the `Lite` model.
+- [x] **Dynamic Animation:** Exposed CFG scaling multipliers to tweak facial intensity live.
+- [ ] **TensorRT Compilation:** Compile the PyTorch graph to NVIDIA TensorRT for aggressive layer fusion and precision calibration (Expected latency drop: ~150ms).
+- [ ] **Temporal Window Shrinking:** Reduce inference batch size from 32 frames (1.28s) to 16 (0.64s) or 8 (0.32s) to drastically cut the minimum audio buffer requirement.
+- [ ] **DeepCache / PrunaAI Integration:** Implement caching mechanisms to skip high-frequency details on alternating diffusion steps for 2x-4x speedups.
+- [ ] **Continuous Frame Yielding:** Refactor the generation loop to `yield` RGB frames sequentially as they decode, staggering the WebRTC push.
+- [ ] **Wav2Vec2 Concurrency:** Move audio feature extraction into an asynchronous 20ms micro-chunking thread so embeddings are instantly ready for the video model.
+- [ ] **FP8/INT8 Quantization:** Quantize model weights via `bitsandbytes` to eliminate VRAM bandwidth bottlenecks.
+- [ ] **Full Autonomous Agent:** Pipe ASR (Deepgram) -> LLM (OpenAI) -> TTS (ElevenLabs) directly into the video transport.
 
 ## 🛠 Prerequisites & Setup
 
 ### Hardware Requirements
-- We recommend an **NVIDIA A100 (40GB/80GB)** or **H100** GPU for real-time inference speeds.
+- An **NVIDIA A100 (40GB/80GB)** or **H100** GPU is strongly recommended for real-time inference speeds.
 - Linux OS (tested on Ubuntu 22.04 on Google Cloud Platform).
 
 ### Environment Setup
@@ -34,7 +47,7 @@ By combining the power of PyTorch `Torchinductor` JIT compilation, background as
 ## 🏃 Running the Pipeline
 
 ### 1. Launch a Local LiveKit Server
-To handle the WebRTC streams locally, download and run the open-source LiveKit server:
+To handle the WebRTC streams locally without browser security issues, run the open-source LiveKit server:
 ```bash
 curl -sSL https://get.livekit.io | bash
 livekit-server --dev --bind 0.0.0.0
@@ -49,23 +62,13 @@ export LIVEKIT_API_SECRET=secret
 ```
 
 ### 3. Start the Avatar Script
-Run the real-time sync script. The script will take ~90 seconds to pre-warm the GPU (Torchinductor graph compilation).
+Run the real-time sync script. The script will take ~90 seconds to pre-warm the GPU.
 ```bash
 python3 webrtc_sync.py
 ```
 
 ### 4. Connect and Interact
-Generate a connection token for the LiveKit room (`aarons-private-soulx-room-20260315-1341`) and use a frontend client like LiveKit Meet to join. Turn on your microphone, and the avatar will mimic your speech in real-time!
-
-## 🔮 Future Improvements & Roadmap
-To push latency down to sub-500ms and improve visual quality, we are actively exploring the following optimizations:
-
-- **TensorRT Compilation:** Compiling the PyTorch graph to NVIDIA TensorRT for aggressive layer fusion and precision calibration, potentially halving the 0.25s render time.
-- **DeepCache / PrunaAI Integration:** Implementing caching mechanisms to skip high-frequency details on alternating diffusion steps for 2x-4x speedups without significant quality loss.
-- **FP8/INT8 Quantization:** Quantizing model weights using `bitsandbytes` to alleviate VRAM bandwidth bottlenecks on Hopper/Ampere architectures.
-- **Temporal Window Shrinking:** Reducing the inference batch size from 32 frames (1.28s) to 16 (0.64s) or 8 (0.32s) to drastically cut the minimum audio buffer requirement.
-- **Pipeline & Transport Overlap:** Refactoring the generation loop to `yield` RGB frames sequentially as they are decoded, staggering the WebRTC push to shave off an additional 100-200ms.
-- **Wav2Vec2 Concurrency:** Moving the audio feature extraction into an asynchronous micro-chunking thread so the embeddings are instantly ready for the video model.
+Generate a connection token for your LiveKit room and use a frontend client like LiveKit Meet to join. Turn on your microphone, and the avatar will mimic your speech in real-time!
 
 ## License
-The SoulX-FlashHead model weights and architecture are licensed under the Apache 2.0 License.
+The SoulX-FlashHead model weights and architecture are licensed under the Apache 2.0 License. All modifications in this repository remain open-source.
