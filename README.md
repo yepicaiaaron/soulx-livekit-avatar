@@ -10,23 +10,22 @@ Our ultimate goal is to achieve a full end-to-end conversational latency (includ
 
 Here is our current progress toward building a sub-700ms diffusion video system:
 
-- [x] **Continuous Streaming:** Avatar idles gracefully and responds instantly to audio without dropping connections.
-- [x] **WebRTC Integration:** Full duplex audio-in/video-out via LiveKit and Pipecat.
-- [x] **JIT Pre-Warming:** Bypassed 2-minute PyTorch graph compilation delays via dummy audio passes.
-- [x] **Sub-1.5s Rendering:** Achieved ~1.0-1.5s latency on a single NVIDIA A100 using the `Lite` model.
-- [x] **Dynamic Animation:** Exposed CFG scaling multipliers to tweak facial intensity live.
-- [x] **LightX2V Autoencoder Integration:** Integrated `lighttaew2_1` / `lightvaew2_1` to reduce VAE decode time and shrink memory footprint from ~10GB to ~0.4GB, freeing up massive VRAM bandwidth for the Denoise loop.
-  - [ ] *Release: Upload the VAE integration code and optimized model config files to public repo.*
-- [x] **DeepCache / PrunaAI Integration:** Implemented caching mechanisms to skip high-frequency details on alternating diffusion steps for 2x-4x speedups.
-  - [ ] *Release: Make PrunaAI / DeepCache optimized scripts publicly available.*
-- [x] **Temporal Window Shrinking:** Reduced inference batch size from 32 frames (1.28s) to 16 (0.64s) or 8 (0.32s) to drastically cut the minimum audio buffer requirement.
-  - [ ] *Release: Publish the dynamic chunk-sizing code and updated inference scripts.*
-- [x] **Continuous Frame Yielding:** Refactored the generation loop to `yield` RGB frames sequentially as they decode, staggering the WebRTC push.
-  - [ ] *Release: Push the staggered WebRTC yielding implementation.*
-- [ ] **TensorRT Compilation:** Compile the PyTorch graph to NVIDIA TensorRT for aggressive layer fusion and precision calibration (Expected latency drop: ~150ms).
-- [ ] **Wav2Vec2 Concurrency:** Move audio feature extraction into an asynchronous 20ms micro-chunking thread so embeddings are instantly ready for the video model.
-- [ ] **FP8/INT8 Quantization:** Quantize model weights via `bitsandbytes` to eliminate VRAM bandwidth bottlenecks.
-- [ ] **Full Autonomous Agent:** Pipe ASR (Deepgram) -> LLM (OpenAI) -> TTS (ElevenLabs) directly into the video transport.
+✅ **Continuous Streaming:** The avatar idles gracefully and responds instantly to audio without dropping connections.
+✅ **WebRTC Integration:** We engineered full duplex audio-in/video-out via LiveKit and Pipecat.
+✅ **JIT Pre-Warming:** We bypassed 2-minute PyTorch graph compilation delays via dummy audio passes on boot.
+✅ **Sub-1.5s Rendering:** We successfully achieved ~1.0-1.5s latency on a single NVIDIA A100 using the `Lite` model.
+✅ **Dynamic Animation:** We exposed CFG scaling multipliers, allowing developers to tweak facial animation intensity live.
+✅ **LightX2V Autoencoder Integration:** We integrated the highly distilled `lighttaew2_1` / `lightvaew2_1` autoencoders. This reduced VAE decode time to near zero and shrank the memory footprint from ~10GB to ~0.4GB, freeing up massive VRAM bandwidth for the primary Denoise loop.
+  - ⏳ *Pending Release: We will upload the VAE integration code and optimized model config files to the public repo shortly.*
+✅ **Temporal Window Shrinking:** We successfully reduced the inference batch size from 32 frames (1.28s) down to 16 (0.64s) or 8 (0.32s), drastically cutting the minimum audio buffer requirement.
+  - ⏳ *Pending Release: We will publish the dynamic chunk-sizing code and updated inference scripts to the public repo.*
+✅ **Continuous Frame Yielding:** We refactored the PyTorch generation loop to `yield` RGB frames sequentially as they decode, effectively staggering the WebRTC push for instant playback.
+  - ⏳ *Pending Release: We will push the staggered WebRTC yielding implementation to the public repo.*
+
+⏳ **TensorRT Compilation:** We are currently working to compile the PyTorch graph to NVIDIA TensorRT for aggressive layer fusion and precision calibration (Expected latency drop: ~150ms).
+⏳ **Wav2Vec2 Concurrency:** We are moving the audio feature extraction into an asynchronous 20ms micro-chunking thread so embeddings are instantly ready for the video model.
+⏳ **FP8/INT8 Quantization:** We plan to quantize the model weights via `bitsandbytes` to eliminate VRAM bandwidth bottlenecks on Hopper architecture.
+⏳ **Full Autonomous Agent:** We will pipe ASR (Deepgram) -> LLM (OpenAI) -> TTS (ElevenLabs) directly into the video transport.
 
 ## 🛠 Prerequisites & Setup
 
