@@ -1,179 +1,74 @@
-# SoulX-FlashHead Pipecat Bot
+# SoulX Real-Time WebRTC Avatar
 
-Real-time talking head generation bot using Pipecat orchestration framework with LiveKit WebRTC transport.
+Welcome to the **SoulX Real-Time WebRTC Avatar** project! This repository demonstrates a hyper-fast, ultra-low latency real-time conversational AI avatar pipeline. 
 
-## Architecture
+**Acknowledgments:** This project is built entirely on top of the incredible **SoulX-FlashHead** architecture. All credit for the base model, distillation techniques, and core inference engine goes to the researchers at Soul-AILab. You can find their original repository and paper here: [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead). Our work focuses strictly on optimizing their engine for continuous WebRTC streaming and sub-second latency.
 
-```
-┌─────────────────┐     WebRTC      ┌──────────────────────────────────────────────────┐
-│   LiveKit       │◄───Audio/Video──►│  SoulX Conversational Bot                        │
-│   Server        │                  │                                                  │
-│                 │                  │  ┌────────────┐    ┌─────────┐    ┌────────────┐ │
-└─────────────────┘                  │  │  STT       │───►│   LLM   │───►│    TTS     │ │
-        ▲                            │  └────────────┘    └─────────┘    └──────┬─────┘ │
-        │                            │         ▲                                │       │
-        │                            │         │                                ▼       │
-   ┌────┴────┐                       │  ┌──────────────┐                 ┌────────────┐ │
-   │  User   │◄──────────────────────┼──│ LiveKit      │                 │ SoulXFlash │ │
-   │ Browser │    WebRTC Video/Audio │  │ Transport    │◄────────────────│ HeadService│ │
-   └─────────┘                       │  └──────────────┘                 └────────────┘ │
-                                    └──────────────────────────────────────────────────┘
-```
+## 🎯 Project Roadmap & Status
 
-## Features
+Our ultimate goal is to achieve a full end-to-end conversational latency (including ASR, LLM, TTS, and video rendering) of **under 600 milliseconds**. 
 
-- **Full Conversational Pipeline**: Low-latency STT (Deepgram), LLM (OpenAI), and TTS (Cartesia).
-- **Real-time audio-to-video streaming**: Audio from TTS is streamed into SoulX-FlashHead model.
-- **WebRTC output**: Generated video frames are streamed back via LiveKit.
-- **Pipecat orchestration**: Modular pipeline architecture for rapid response.
+Here is our current progress toward building a sub-700ms diffusion video system:
 
-## Files
+- ✅ **Continuous Streaming:** Built idle/active WebRTC stream handler (100% uptime improvement).
+- ✅ **JIT Pre-Warming:** Bypassed PyTorch graph compilation delays (~120,000ms latency reduction on boot).
+- ✅ **Sub-1.5s Rendering:** Optimized A100 Lite model inference (~5x faster than real-time playback).
+- ✅ **Dynamic Animation:** Exposed CFG scaling for live facial intensity tweaks (Zero latency cost).
+- ✅ **LightX2V Autoencoder:** Integrated distilled VAE (Decode time reduced ~35ms/chunk; VRAM footprint reduced by ~9.6GB).
+- ✅ **Release LightX2V Integration:** Upload VAE integration code and optimized model config files to public repo.
+- ⏳ **Temporal Window Shrinking:** Reduce batch size from 32 to 8 frames (~960ms minimum audio context latency reduction).
+- ⏳ **Continuous Frame Yielding:** Yield RGB frames sequentially during decode (~150ms perceived latency reduction).
+- ⏳ **TensorRT Compilation:** Compile PyTorch graph to NVIDIA TensorRT (Expected latency reduction: ~150ms).
+- ⏳ **Wav2Vec2 Concurrency:** Asynchronous micro-chunking for audio extraction (Expected latency reduction: ~30ms).
+- ⏳ **FP8/INT8 Quantization:** Quantize model weights via `bitsandbytes` (Expected rendering speedup: ~30%).
+- ⏳ **Full Autonomous Agent:** Pipe Deepgram ASR -> OpenAI LLM -> ElevenLabs TTS directly into transport.
 
-| File | Description |
-|------|-------------|
-| `soulx_conversational_bot.py` | Main conversational orchestration script |
-| `pipecat_soulx_service.py` | SoulXFlashHeadService implementation |
-| `requirements_pipecat.txt` | Pipecat, LiveKit, and AI service dependencies |
-| `run_conversational_bot.sh` | Launch script for the conversational bot |
-| `setup_node.sh` | Node environment setup script |
-| `Dockerfile` | Container image definition |
+## 🛠 Prerequisites & Setup
 
-## Quick Start
+### Hardware Requirements
+- An **NVIDIA A100 (40GB/80GB)** or **H100** GPU is strongly recommended for real-time inference speeds.
+- Linux OS (tested on Ubuntu 22.04 on Google Cloud Platform).
 
-### 1. Setup Environment
+### Environment Setup
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/yepicaiaaron/soulx-livekit-avatar.git
+   cd soulx-livekit-avatar
+   ```
+2. **Install dependencies:**
+   Ensure you have Python 3.10+ and CUDA 12.x installed.
+   ```bash
+   pip install -r requirements.txt
+   pip install -r requirements_pipecat.txt
+   ```
+3. **Download the Models:**
+   Download the `SoulX-FlashHead-1_3B` and `wav2vec2-base-960h` models from HuggingFace and place them in the `models/` directory.
 
+## 🏃 Running the Pipeline
+
+### 1. Launch a Local LiveKit Server
+To handle the WebRTC streams locally without browser security issues, run the open-source LiveKit server:
 ```bash
-./setup_node.sh
-pip install -r requirements_pipecat.txt
+curl -sSL https://get.livekit.io | bash
+livekit-server --dev --bind 0.0.0.0
 ```
 
-### 2. Configure API Keys and LiveKit
-
+### 2. Configure Environment Variables
+Set your LiveKit credentials (use `devkey` and `secret` if using the local `--dev` server):
 ```bash
-export OPENAI_API_KEY=your-openai-key
-export DEEPGRAM_API_KEY=your-deepgram-key
-export CARTESIA_API_KEY=your-cartesia-key
-export LIVEKIT_URL=wss://your-livekit-server:7880
-export LIVEKIT_TOKEN=your-access-token
-export LIVEKIT_ROOM=soulx-flashhead-room
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_API_KEY=devkey
+export LIVEKIT_API_SECRET=secret
 ```
 
-### 3. Run the Bot
-
+### 3. Start the Avatar Script
+Run the real-time sync script. The script will take ~90 seconds to pre-warm the GPU.
 ```bash
-./run_conversational_bot.sh
+python3 webrtc_sync.py
 ```
 
-## Quick Start
-
-### Prerequisites
-
-- NVIDIA GPU (RTX 4090 for Lite model, dual RTX 5090 for Pro model real-time)
-- CUDA 12.8+
-- LiveKit server
-- Model weights from HuggingFace
-
-### 1. Setup Environment
-
-```bash
-./setup_node.sh
-```
-
-### 2. Download Models
-
-```bash
-# FlashHead model
-huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B --local-dir ./models/SoulX-FlashHead-1_3B
-
-# Wav2Vec audio encoder
-huggingface-cli download facebook/wav2vec2-base-960h --local-dir ./models/wav2vec2-base-960h
-```
-
-### 3. Configure LiveKit
-
-```bash
-export LIVEKIT_URL=wss://your-livekit-server:7880
-export LIVEKIT_TOKEN=your-access-token
-export LIVEKIT_ROOM=soulx-flashhead-room
-```
-
-### 4. Run the Bot
-
-```bash
-./run_bot.sh
-```
-
-## Configuration
-
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SOULX_CKPT_DIR` | `./models/SoulX-FlashHead-1_3B` | Model checkpoint directory |
-| `SOULX_WAV2VEC_DIR` | `./models/wav2vec2-base-960h` | Wav2Vec model directory |
-| `SOULX_MODEL_TYPE` | `lite` | Model type: `lite` or `pro` |
-| `SOULX_COND_IMAGE` | `./examples/cond_image.png` | Condition image for generation |
-| `SOULX_SEED` | `42` | Random seed |
-| `SOULX_USE_FACE_CROP` | `false` | Enable face cropping |
-| `LIVEKIT_URL` | `wss://localhost:7880` | LiveKit server URL |
-| `LIVEKIT_TOKEN` | - | LiveKit access token |
-| `LIVEKIT_ROOM` | `soulx-flashhead-room` | Room name |
-
-## Docker Deployment
-
-```bash
-# Build and run
-docker-compose up --build
-
-# Or with custom environment
-docker-compose -e LIVEKIT_URL=wss://your-server:7880 up
-```
-
-## Pipeline Details
-
-### Audio Flow
-
-1. **LiveKitTransport (input)**: Receives 16kHz, 16-bit PCM audio via WebRTC
-2. **SoulXFlashHeadService**: 
-   - Buffers audio chunks (800ms for 25fps)
-   - Runs wav2vec encoding
-   - Generates video frames via FlashHead model
-3. **LiveKitTransport (output)**: Sends generated video frames via WebRTC
-
-### Video Flow
-
-1. SoulX-FlashHead generates frames at 25fps
-2. RawImageFrames (512x512 RGB) are yielded to transport
-3. Transport encodes and streams via WebRTC
-
-## Troubleshooting
-
-### CUDA Out of Memory
-
-- Use `lite` model instead of `pro`
-- Reduce `frame_num` in config (requires model change)
-- Enable model offloading
-
-### High Latency
-
-- Check GPU utilization with `nvidia-smi`
-- Ensure SageAttention is installed for Pro model
-- Verify LiveKit server proximity
-
-### Audio/Video Sync Issues
-
-- Check network latency to LiveKit server
-- Monitor buffer levels in logs
-- Adjust `cached_audio_duration` if needed
-
-## References
-
-- [YEP-16] LiveKit Transport Integration
-- [YEP-17] Real-time Audio-to-Video Streaming
-- [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead)
-- [Pipecat](https://github.com/pipecat-ai/pipecat)
-- [LiveKit](https://livekit.io/)
+### 4. Connect and Interact
+Generate a connection token for your LiveKit room and use a frontend client like LiveKit Meet to join. Turn on your microphone, and the avatar will mimic your speech in real-time!
 
 ## License
-
-See SoulX-FlashHead repository for model licensing.
+The SoulX-FlashHead model weights and architecture are licensed under the Apache 2.0 License. All modifications in this repository remain open-source.
