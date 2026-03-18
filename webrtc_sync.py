@@ -165,7 +165,7 @@ class WebRTCSyncPusher(FrameProcessor):
             start_time = time.time()
             
             try:
-                if len(self.playback_queue) > 50:
+                if len(self.playback_queue) > 999:
                     logger.warning(f"Playback queue too large ({len(self.playback_queue)}). Catching up to real-time...")
                     while len(self.playback_queue) > 25:
                         self.playback_queue.popleft()
@@ -201,7 +201,7 @@ async def main():
         url = 'wss://chatgptme-sp76gr03.livekit.cloud'
         api_key = 'API6pGtbWcmZpMs'
         api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA = 'dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA'
-        room_name = 'aarons-private-soulx-room-20260315-1341'
+        room_name = 'soulx-flashhead-room'
 
         token = api.AccessToken(api_key, api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA) \
             .with_identity('soulx-video-bot') \
