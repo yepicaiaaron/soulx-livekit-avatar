@@ -1,74 +1,66 @@
-# SoulX Real-Time WebRTC Avatar
+# SoulX-FlashHead WebRTC Avatar
 
-Welcome to the **SoulX Real-Time WebRTC Avatar** project! This repository demonstrates a hyper-fast, ultra-low latency real-time conversational AI avatar pipeline. 
+A fully real-time, low-latency, "echo-back" talking head integration using [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead) and [LiveKit](https://livekit.io/) via Pipecat.
 
-**Acknowledgments:** This project is built entirely on top of the incredible **SoulX-FlashHead** architecture. All credit for the base model, distillation techniques, and core inference engine goes to the researchers at Soul-AILab. You can find their original repository and paper here: [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead). Our work focuses strictly on optimizing their engine for continuous WebRTC streaming and sub-second latency.
+## 🚀 Key Achievements
+- **Real-Time Lip-Sync:** Captures user audio from a WebRTC room and streams back a lip-synced video avatar in real time.
+- **LightX2V Distilled VAE:** Integrates the distilled VAE, heavily reducing the decode time (saving ~35ms per chunk) and minimizing VRAM footprint.
+- **Hardware Optimized:** Uses `enable_flash_sdp(True)` to shave ~3ms per denoising step over eager operations.
+- **Intelligent Playback Queue:** Binds video frame delivery to the system atomic clock (`time.perf_counter()`) to guarantee mathematically accurate 25fps WebRTC streaming without robotic skipping or "queue drift." The avatar remains smoothly visible via an idle frame during periods of silence.
 
-## 🎯 Project Roadmap & Status
+## 🛠️ Environment Setup & Installation
 
-Our ultimate goal is to achieve a full end-to-end conversational latency (including ASR, LLM, TTS, and video rendering) of **under 600 milliseconds**. 
+### 1. Repository Structure
+Ensure you have cloned both the base `SoulX-FlashHead` library and this WebRTC service wrapper on the same machine.
 
-Here is our current progress toward building a sub-700ms diffusion video system:
+1. Clone `SoulX-FlashHead` and download the models (you will need the 1.3B model and `wav2vec2-base-960h`).
+2. Clone this repository.
 
-- ✅ **Continuous Streaming:** Built idle/active WebRTC stream handler (100% uptime improvement).
-- ✅ **JIT Pre-Warming:** Bypassed PyTorch graph compilation delays (~120,000ms latency reduction on boot).
-- ✅ **Sub-1.5s Rendering:** Optimized A100 Lite model inference (~5x faster than real-time playback).
-- ✅ **Dynamic Animation:** Exposed CFG scaling for live facial intensity tweaks (Zero latency cost).
-- ✅ **LightX2V Autoencoder:** Integrated distilled VAE (Decode time reduced ~35ms/chunk; VRAM footprint reduced by ~9.6GB).
-- ✅ **Release LightX2V Integration:** Upload VAE integration code and optimized model config files to public repo.
-- ⏳ **Temporal Window Shrinking:** Reduce batch size from 32 to 8 frames (~960ms minimum audio context latency reduction).
-- ⏳ **Continuous Frame Yielding:** Yield RGB frames sequentially during decode (~150ms perceived latency reduction).
-- ⏳ **TensorRT Compilation:** Compile PyTorch graph to NVIDIA TensorRT (Expected latency reduction: ~150ms).
-- ⏳ **Wav2Vec2 Concurrency:** Asynchronous micro-chunking for audio extraction (Expected latency reduction: ~30ms).
-- ⏳ **FP8/INT8 Quantization:** Quantize model weights via `bitsandbytes` (Expected rendering speedup: ~30%).
-- ⏳ **Full Autonomous Agent:** Pipe Deepgram ASR -> OpenAI LLM -> ElevenLabs TTS directly into transport.
+### 2. Symlinks (Crucial Step)
+The Python imports and model loaders require exact directory structures. From the root of this repo, create symlinks to your base installation:
 
-## 🛠 Prerequisites & Setup
-
-### Hardware Requirements
-- An **NVIDIA A100 (40GB/80GB)** or **H100** GPU is strongly recommended for real-time inference speeds.
-- Linux OS (tested on Ubuntu 22.04 on Google Cloud Platform).
-
-### Environment Setup
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/yepicaiaaron/soulx-livekit-avatar.git
-   cd soulx-livekit-avatar
-   ```
-2. **Install dependencies:**
-   Ensure you have Python 3.10+ and CUDA 12.x installed.
-   ```bash
-   pip install -r requirements.txt
-   pip install -r requirements_pipecat.txt
-   ```
-3. **Download the Models:**
-   Download the `SoulX-FlashHead-1_3B` and `wav2vec2-base-960h` models from HuggingFace and place them in the `models/` directory.
-
-## 🏃 Running the Pipeline
-
-### 1. Launch a Local LiveKit Server
-To handle the WebRTC streams locally without browser security issues, run the open-source LiveKit server:
 ```bash
-curl -sSL https://get.livekit.io | bash
-livekit-server --dev --bind 0.0.0.0
+# Link the core model engine
+ln -s /path/to/SoulX-FlashHead/SoulX-FlashHead-src/flash_head flash_head
+
+# Link the downloaded models (offline HuggingFace mode)
+ln -s /path/to/SoulX-FlashHead/models models
+```
+*Note: If running with `HF_HUB_OFFLINE=1`, any broken symlinks will cause the engine to aggressively attempt (and fail) to download weights from the internet.*
+
+### 3. Environment Variables
+Create a `.env` file in the root of this repository with your LiveKit credentials:
+
+```env
+LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
+LIVEKIT_API_KEY=your_api_key
+LIVEKIT_API_SECRET=your_api_secret
 ```
 
-### 2. Configure Environment Variables
-Set your LiveKit credentials (use `devkey` and `secret` if using the local `--dev` server):
-```bash
-export LIVEKIT_URL=ws://127.0.0.1:7880
-export LIVEKIT_API_KEY=devkey
-export LIVEKIT_API_SECRET=secret
+### 4. Configuration
+You must configure the chunking behavior in `flash_head/configs/infer_params.yaml`. 
+For stable streaming with standard SDPA math, use a 33-frame chunk size:
+```yaml
+frame_num: 33
+tgt_fps: 25
+sample_rate: 16000
 ```
+*(Note: Reducing `frame_num` further without customized Triton kernels will cause PyTorch compilation `FakeTensor` shape mismatches).*
 
-### 3. Start the Avatar Script
-Run the real-time sync script. The script will take ~90 seconds to pre-warm the GPU.
+## 🏃 Running the Bot
+
+Start the service using Python. The engine will undergo a ~3-minute `torch.compile` pre-warming sequence before connecting to the LiveKit room.
+
 ```bash
+source .env
 python3 webrtc_sync.py
 ```
 
-### 4. Connect and Interact
-Generate a connection token for your LiveKit room and use a frontend client like LiveKit Meet to join. Turn on your microphone, and the avatar will mimic your speech in real-time!
+1. Look for `SoulX Model fully loaded and GPU is pre-warmed.` in the logs.
+2. Look for `Connected to soulx-flashhead-room`.
+3. Use a generated LiveKit JWT to join the room. **Important:** Generic Meet links without authenticated tokens will drop you into empty fallback rooms.
 
-## License
-The SoulX-FlashHead model weights and architecture are licensed under the Apache 2.0 License. All modifications in this repository remain open-source.
+## 🔮 Future Optimizations & Roadmap
+To push the performance boundary even further (and safely lower `frame_num` to 9 for sub-360ms latency), the following low-level updates are required:
+- **Flash Attention 3 Upgrade (YEP-49):** Rewrite the core attention blocks to use TMA asynchronously on Hopper/Blackwell hardware.
+- **Custom Triton Kernels (YEP-48):** Port the bare-metal Flash Norm and RoPE Triton kernels to eliminate the PyTorch eager math bottlenecks completely.
