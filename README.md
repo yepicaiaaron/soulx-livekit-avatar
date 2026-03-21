@@ -1,4 +1,4 @@
-# SoulX-FlashHead WebRTC Avatar
+Real Time Diffusion WebRTC Avatar
 
 A fully real-time, low-latency, "echo-back" talking head integration using [SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead) and [LiveKit](https://livekit.io/) via Pipecat.
 
