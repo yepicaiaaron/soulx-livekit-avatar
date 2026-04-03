@@ -17,9 +17,19 @@ services:
         sync: false
       - key: LIVEKIT_API_SECRET
         sync: false
+      - key: LIVEKIT_ROOM
+        value: soulx-flashhead-room
       - key: SOULX_MODEL_TYPE
         value: lite
       - key: SOULX_CKPT_DIR
         value: ./models/SoulX-FlashHead-1_3B
       - key: SOULX_WAV2VEC_DIR
         value: ./models/wav2vec2-base-960h
+      - key: SOULX_COND_IMAGE
+        value: ./examples/omani_character.png
+      - key: PERCEPTION_INTERVAL
+        value: "3.0"
+      - key: DAILY_ROOM_URL
+        sync: false
+      - key: DAILY_TOKEN
+        sync: false

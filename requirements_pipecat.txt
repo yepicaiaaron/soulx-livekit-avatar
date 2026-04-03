@@ -1,7 +1,7 @@
 # Pipecat and LiveKit dependencies for SoulX-FlashHead Bot
 # To be installed in addition to SoulX-FlashHead base requirements
 
-# Pipecat core and LiveKit transport
+# Pipecat core with LiveKit and OpenAI transports/services
 pipecat-ai>=0.0.103
 pipecat-ai[livekit]>=0.0.103
 pipecat-ai[openai]>=0.0.103
@@ -34,3 +34,8 @@ numpy>=1.24.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 loguru>=0.7.0
+
+# Optional: Daily.co WebRTC capture for the perception engine
+# Uncomment or install separately to enable Daily.co room support:
+#   pip install daily-python
+# daily-python
