@@ -23,8 +23,10 @@
 set -euo pipefail
 
 # ── Model selection ────────────────────────────────────────────────────────
-# Override with:  MODEL_TYPE=pro bash setup_lightning.sh
-# Or set SOULX_MODEL_TYPE in Lightning.ai Secrets before running.
+# Precedence: MODEL_TYPE env var (set inline) > SOULX_MODEL_TYPE (Lightning.ai Secret) > lite
+# Examples:
+#   MODEL_TYPE=pro bash setup_lightning.sh          # explicit inline override
+#   SOULX_MODEL_TYPE=pro; bash setup_lightning.sh   # via Secret already in environment
 MODEL_TYPE="${MODEL_TYPE:-${SOULX_MODEL_TYPE:-lite}}"
 
 if [[ "$MODEL_TYPE" != "lite" && "$MODEL_TYPE" != "pro" ]]; then
@@ -191,8 +193,10 @@ echo "║   Then expose port 7860 in the Lightning.ai UI:          ║"
 echo "║     Left sidebar → Ports → Add port 7860 → Public        ║"
 echo "║                                                          ║"
 if [[ "$MODEL_TYPE" == "pro" ]]; then
-echo "║   Model_Pro is active. Add SOULX_MODEL_TYPE=pro to        ║"
-echo "║   Lightning.ai Secrets before launching the avatar.      ║"
+echo "║   Model_Pro downloaded. To use it, add this secret:      ║"
+echo "║     SOULX_MODEL_TYPE = pro                               ║"
+echo "║   Without this secret the bot defaults to Model_Lite     ║"
+echo "║   and will fail to find the Pro weights at runtime.      ║"
 fi
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
