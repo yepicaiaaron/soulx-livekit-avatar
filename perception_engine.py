@@ -158,7 +158,7 @@ class PerceptionEngine:
 
         class _DailyHandler:
             def on_participant_joined(self, participant) -> None:
-                logger.info(f"[Perception] Participant joined: {participant.get('id', '?')}")
+                logger.info(f"[Perception] Participant joined: {participant.get('id', 'unknown')}")
 
             def on_participant_updated(self, participant) -> None:
                 """Track which participants have an active screenVideo stream."""
