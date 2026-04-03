@@ -3,17 +3,36 @@
 #  SoulX Avatar — Lightning.ai A100 One-Shot Setup Script
 #
 #  Run from the repo root:
-#    bash setup_lightning.sh
+#    bash setup_lightning.sh               # downloads Model_Lite (default)
+#    MODEL_TYPE=pro bash setup_lightning.sh # downloads Model_Pro instead
+#
+#  Model options:
+#    lite  — Model_Lite:  96 FPS on A100; supports 3x concurrent real-time streams.
+#              Uses LTX-Video VAE. Recommended for single-GPU A100 80 GB.
+#    pro   — Model_Pro:  higher visual quality; real-time (25+ FPS) on A100 80 GB.
+#              Uses WAN VAE. Requires more VRAM and is slower per frame.
 #
 #  What it does:
 #    1. Checks GPU
 #    2. Installs PyTorch 2.7.1 (CUDA 12.8) + all Python deps
 #    3. Installs FlashAttention 2 (pre-built wheel when possible)
-#    4. Downloads SoulX-FlashHead Model_Lite + VAE_LTX + wav2vec2
+#    4. Downloads the selected SoulX-FlashHead model + VAE + wav2vec2
 #    5. Verifies the install
 # ==============================================================================
 
 set -euo pipefail
+
+# ── Model selection ────────────────────────────────────────────────────────
+# Precedence: MODEL_TYPE env var (set inline) > SOULX_MODEL_TYPE (Lightning.ai Secret) > lite
+# Examples:
+#   MODEL_TYPE=pro bash setup_lightning.sh          # explicit inline override
+#   SOULX_MODEL_TYPE=pro; bash setup_lightning.sh   # via Secret already in environment
+MODEL_TYPE="${MODEL_TYPE:-${SOULX_MODEL_TYPE:-lite}}"
+
+if [[ "$MODEL_TYPE" != "lite" && "$MODEL_TYPE" != "pro" ]]; then
+    echo "Unknown MODEL_TYPE='${MODEL_TYPE}'. Must be 'lite' or 'pro'."
+    exit 1
+fi
 
 # Colours
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -25,6 +44,12 @@ echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║   SoulX Avatar — Lightning.ai A100 Setup                ║"
 echo "║   This will take 15–25 minutes on first run.            ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+if [[ "$MODEL_TYPE" == "lite" ]]; then
+echo "║   Model: Model_Lite  (96 FPS on A100 — recommended)     ║"
+else
+echo "║   Model: Model_Pro   (higher quality, more VRAM)        ║"
+fi
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -87,20 +112,25 @@ fi
 echo ""
 
 # ── Step 5: Model download ────────────────────────────────────────────────
-echo "📥  [5/5]  Downloading SoulX-FlashHead models (Model_Lite only, ~5–8 GB)…"
-echo "   This is the biggest step — grab a coffee ☕"
-echo ""
-
 mkdir -p models
 
-# Download only the files needed for Model_Lite inference:
-#   Model_Lite/**   — distilled Lite model weights
-#   VAE_LTX/**      — LTX-Video VAE used by Lite model
-# (Skipping Model_Pro — saves ~4 GB on an already large download)
-echo "   Downloading SoulX-FlashHead-1_3B (Model_Lite + VAE_LTX)…"
-huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B \
-    --include "Model_Lite/**" "VAE_LTX/**" \
-    --local-dir ./models/SoulX-FlashHead-1_3B
+if [[ "$MODEL_TYPE" == "lite" ]]; then
+    echo "📥  [5/5]  Downloading Model_Lite + VAE_LTX (~5–8 GB)…"
+    echo "   Model_Lite: 96 FPS on A100 — perfect for real-time streaming."
+    echo "   This is the biggest step — grab a coffee ☕"
+    echo ""
+    huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B \
+        --include "Model_Lite/**" "VAE_LTX/**" \
+        --local-dir ./models/SoulX-FlashHead-1_3B
+else
+    echo "📥  [5/5]  Downloading Model_Pro + VAE_WAN (~8–12 GB)…"
+    echo "   Model_Pro: higher visual quality; runs real-time on A100 80 GB."
+    echo "   This is the biggest step — grab a coffee ☕"
+    echo ""
+    huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B \
+        --include "Model_Pro/**" "VAE_WAN/**" \
+        --local-dir ./models/SoulX-FlashHead-1_3B
+fi
 
 echo ""
 echo "   Downloading wav2vec2-base-960h audio encoder…"
@@ -113,8 +143,8 @@ echo ""
 # ── Verify installation ───────────────────────────────────────────────────
 echo "🧪  Verifying installation…"
 
-python - <<'PYEOF'
-import sys, torch
+MODEL_TYPE_FOR_PY="$MODEL_TYPE" python - <<'PYEOF'
+import sys, torch, os
 
 # CUDA
 assert torch.cuda.is_available(), "CUDA is not available — re-check your GPU machine selection in Lightning.ai"
@@ -134,13 +164,22 @@ import daily
 print(f"   daily-python: OK")
 
 # Model weights (spot-check)
-import os
-lite_dir = "./models/SoulX-FlashHead-1_3B/Model_Lite"
-vae_dir  = "./models/SoulX-FlashHead-1_3B/VAE_LTX"
-wav_dir  = "./models/wav2vec2-base-960h"
-for d in [lite_dir, vae_dir, wav_dir]:
+model_type = os.environ.get("MODEL_TYPE_FOR_PY", "lite")
+ckpt_base  = "./models/SoulX-FlashHead-1_3B"
+if model_type == "lite":
+    check_dirs = [
+        os.path.join(ckpt_base, "Model_Lite"),
+        os.path.join(ckpt_base, "VAE_LTX"),
+    ]
+else:
+    check_dirs = [
+        os.path.join(ckpt_base, "Model_Pro"),
+        os.path.join(ckpt_base, "VAE_WAN"),
+    ]
+check_dirs.append("./models/wav2vec2-base-960h")
+for d in check_dirs:
     assert os.path.isdir(d), f"Missing model directory: {d}"
-print(f"   Model weights: OK")
+print(f"   Model weights ({model_type}): OK")
 PYEOF
 
 echo ""
@@ -153,5 +192,11 @@ echo "║                                                          ║"
 echo "║   Then expose port 7860 in the Lightning.ai UI:          ║"
 echo "║     Left sidebar → Ports → Add port 7860 → Public        ║"
 echo "║                                                          ║"
+if [[ "$MODEL_TYPE" == "pro" ]]; then
+echo "║   Model_Pro downloaded. To use it, add this secret:      ║"
+echo "║     SOULX_MODEL_TYPE = pro                               ║"
+echo "║   Without this secret the bot defaults to Model_Lite     ║"
+echo "║   and will fail to find the Pro weights at runtime.      ║"
+fi
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""

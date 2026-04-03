@@ -42,7 +42,7 @@ User sees lip-synced avatar speaking in real time
 
 1. **Daily.co** — a Daily.co room URL, and optionally a participant token for private rooms.
 2. **OpenAI** — API key with access to Whisper, GPT-4o, and TTS.
-3. **SoulX-FlashHead models** — see README for symlink instructions.
+3. **SoulX-FlashHead models** — download via `bash setup_lightning.sh` (see README for details).
 
 ## Deployment on Render.com
 
