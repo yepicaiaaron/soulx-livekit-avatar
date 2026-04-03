@@ -74,7 +74,7 @@ cd soulx-livekit-avatar
 
 ## Step 5 — Run the Setup Script
 
-Copy and paste this single command:
+### Default: Model_Lite (recommended for A100 80 GB)
 
 ```bash
 bash setup_lightning.sh
@@ -84,11 +84,32 @@ bash setup_lightning.sh
 - ✅ Installs PyTorch with CUDA 12.8 support
 - ✅ Installs all Python dependencies (Pipecat, Daily.co, OpenAI SDK, etc.)
 - ✅ Installs FlashAttention 2 (GPU speed booster)
-- ✅ Downloads the **SoulX-FlashHead Model_Lite** weights (~5–8 GB) from HuggingFace
+- ✅ Downloads **SoulX-FlashHead Model_Lite** weights (~5–8 GB) from HuggingFace
 - ✅ Downloads the **wav2vec2** audio encoder from HuggingFace
 
 ⏳ **This takes about 15–25 minutes** — mostly for downloading the models.
 When you see `✅ Setup complete!` you are ready.
+
+### Optional: Model_Pro (higher visual quality)
+
+```bash
+MODEL_TYPE=pro bash setup_lightning.sh
+```
+
+Downloads **Model_Pro + VAE_WAN** (~8–12 GB) instead of Model_Lite. After setup, add
+`SOULX_MODEL_TYPE=pro` to Lightning.ai Secrets before launching.
+
+> **Which model should I use?**
+>
+> | | Model_Lite | Model_Pro |
+> |---|---|---|
+> | Speed on A100 80 GB | **96 FPS** (3× real-time headroom) | 25+ FPS (real-time) |
+> | Visual quality | Good | Higher |
+> | Download size | ~5–8 GB | ~8–12 GB |
+> | Single A100 | ✅ Recommended | ✅ Works |
+>
+> Start with **Model_Lite** — it is faster, lighter, and runs comfortably in real-time.
+> Switch to **Model_Pro** only if you need higher output quality.
 
 ---
 
@@ -159,7 +180,7 @@ Everything else has sensible defaults.
 | `DAILY_API_KEY` | ✅ | — | Daily.co API key (creates rooms automatically) |
 | `OPENAI_API_KEY` | ✅ | — | OpenAI key for Whisper STT + GPT-4o + TTS |
 | `DAILY_ROOM_URL` | | *(auto)* | Pre-made room URL. Leave blank — the bot creates one from `DAILY_API_KEY` |
-| `SOULX_MODEL_TYPE` | | `lite` | `lite` (96 fps, 1 GPU) or `pro` (higher quality, 2 GPUs) |
+| `SOULX_MODEL_TYPE` | | `lite` | `lite` (96 FPS on A100, recommended) or `pro` (higher quality) |
 | `SOULX_CKPT_DIR` | | `./models/SoulX-FlashHead-1_3B` | Model checkpoint directory |
 | `SOULX_WAV2VEC_DIR` | | `./models/wav2vec2-base-960h` | wav2vec2 audio encoder directory |
 | `SOULX_COND_IMAGE` | | `./examples/omani_character.png` | Avatar portrait image path |
@@ -204,11 +225,23 @@ You picked a CPU-only machine. Go back to Step 1 and make sure to select the **A
 
 ### Models fail to download
 Run just the download commands manually:
+
+**Model_Lite:**
 ```bash
 huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B \
     --include "Model_Lite/**" "VAE_LTX/**" \
     --local-dir ./models/SoulX-FlashHead-1_3B
+```
 
+**Model_Pro:**
+```bash
+huggingface-cli download Soul-AILab/SoulX-FlashHead-1_3B \
+    --include "Model_Pro/**" "VAE_WAN/**" \
+    --local-dir ./models/SoulX-FlashHead-1_3B
+```
+
+**Audio encoder (required for both):**
+```bash
 huggingface-cli download facebook/wav2vec2-base-960h \
     --local-dir ./models/wav2vec2-base-960h
 ```
@@ -238,7 +271,8 @@ soulx_conversational_bot.py (Pipecat pipeline)
 Daily.co WebRTC video+audio out  ──► User sees & hears avatar
 ```
 
-**Model used:** SoulX-FlashHead **Model_Lite** (1.3B params)
-- Runs at **96 FPS** on a single A100 — far above real-time (25 FPS needed)
+**Model:** SoulX-FlashHead (1.3B params) — choose Lite or Pro via `SOULX_MODEL_TYPE`
+- **Model_Lite:** 96 FPS on A100 — well above the 25 FPS real-time requirement
+- **Model_Pro:** higher visual quality; 25+ FPS (real-time) on A100 80 GB
 - Source: [Soul-AILab/SoulX-FlashHead](https://github.com/Soul-AILab/SoulX-FlashHead)
 - Weights: [huggingface.co/Soul-AILab/SoulX-FlashHead-1_3B](https://huggingface.co/Soul-AILab/SoulX-FlashHead-1_3B)

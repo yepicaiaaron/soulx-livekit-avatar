@@ -92,8 +92,8 @@ class FlashHeadPipeline:
                 device=self.device,
             )
         else:
-            vae_path = "models/vae/lightvaew2_1.pth"
-            
+            vae_path = os.path.join(checkpoint_dir, "VAE_WAN", "lightvaew2_1.pth")
+
             from flash_head.wan.modules import WanVAE
             self.vae = WanVAE(
                 vae_path=vae_path,

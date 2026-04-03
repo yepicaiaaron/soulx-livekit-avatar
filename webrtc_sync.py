@@ -46,7 +46,8 @@ class WebRTCSyncPusher(FrameProcessor):
         self.playback_queue = collections.deque()
         self.generation_queue = asyncio.Queue()
         
-        idle_img = cv2.imread("examples/omani_character.png")
+        idle_img_path = os.environ.get("SOULX_COND_IMAGE", "examples/omani_character.png")
+        idle_img = cv2.imread(idle_img_path)
         if idle_img is None:
             idle_img = np.zeros((512, 512, 3), dtype=np.uint8)
         else:
