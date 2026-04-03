@@ -158,11 +158,14 @@ Everything else has sensible defaults.
 |------------------|:--------:|---------|-------------|
 | `DAILY_API_KEY` | ✅ | — | Daily.co API key (creates rooms automatically) |
 | `OPENAI_API_KEY` | ✅ | — | OpenAI key for Whisper STT + GPT-4o + TTS |
+| `DAILY_ROOM_URL` | | *(auto)* | Pre-made room URL. Leave blank — the bot creates one from `DAILY_API_KEY` |
 | `SOULX_MODEL_TYPE` | | `lite` | `lite` (96 fps, 1 GPU) or `pro` (higher quality, 2 GPUs) |
 | `SOULX_CKPT_DIR` | | `./models/SoulX-FlashHead-1_3B` | Model checkpoint directory |
 | `SOULX_WAV2VEC_DIR` | | `./models/wav2vec2-base-960h` | wav2vec2 audio encoder directory |
 | `SOULX_COND_IMAGE` | | `./examples/omani_character.png` | Avatar portrait image path |
 | `PERCEPTION_INTERVAL` | | `3.0` | Seconds between webcam/screen analysis (OpenAI Vision) |
+| `DAILY_ROOM_REGION` | | `us-east-1` | Daily.co geographic region for new rooms |
+| `DAILY_ROOM_PRIVACY` | | `public` | `public` or `private` for auto-created rooms |
 
 ---
 

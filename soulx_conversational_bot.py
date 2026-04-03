@@ -4,8 +4,8 @@ Full real-time pipeline orchestrated by Pipecat:
   User speaks via WebRTC → OpenAI Whisper STT → GPT-4o LLM (tool calling)
   → OpenAI TTS → WebRTCSyncPusher (SoulX avatar lip-sync + Daily.co publish)
 
-Environment variables (see .env or Render dashboard):
-  DAILY_ROOM_URL, DAILY_TOKEN
+Environment variables (see .env or deployment dashboard):
+  DAILY_ROOM_URL or DAILY_API_KEY, DAILY_TOKEN
   OPENAI_API_KEY
   SOULX_MODEL_TYPE (lite|pro), SOULX_CKPT_DIR, SOULX_WAV2VEC_DIR
   SOULX_COND_IMAGE        path to avatar portrait (default: examples/omani_character.png)
@@ -17,8 +17,10 @@ import asyncio
 import operator as op
 import os
 import json
+import uuid
 import numpy as np
 import torch
+from urllib import request as _urllib_request, error as _urllib_error
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -217,6 +219,64 @@ def warmup_gpu(model_pipeline):
 
 
 # ---------------------------------------------------------------------------
+# Daily.co room auto-creation
+# ---------------------------------------------------------------------------
+
+def create_daily_room_if_needed(daily_room_url: str, daily_api_key: str) -> str:
+    """Return *daily_room_url* unchanged if set; otherwise create a fresh room.
+
+    Uses only the stdlib ``urllib`` so no extra dependency is required.
+    Controlled by optional env vars:
+      DAILY_API_BASE_URL   override the rooms endpoint (default: https://api.daily.co/v1/rooms)
+      DAILY_ROOM_PRIVACY   "public" (default) or "private"
+      DAILY_ROOM_NAME      explicit room name; defaults to a random soulx-<hex> slug
+      DAILY_ROOM_REGION    Daily.co geo region (default: us-east-1)
+    """
+    if daily_room_url:
+        return daily_room_url
+    if not daily_api_key:
+        return ""
+
+    api_url    = os.environ.get("DAILY_API_BASE_URL", "https://api.daily.co/v1/rooms")
+    privacy    = os.environ.get("DAILY_ROOM_PRIVACY", "public")
+    room_name  = os.environ.get("DAILY_ROOM_NAME", f"soulx-{uuid.uuid4().hex[:10]}")
+    room_region = os.environ.get("DAILY_ROOM_REGION", "us-east-1")
+
+    payload = {
+        "name": room_name,
+        "privacy": privacy,
+        "properties": {
+            "geo": room_region,
+            "exp": int(datetime.now().timestamp()) + (60 * 60 * 12),  # 12-hour expiry
+            "enable_prejoin_ui": False,
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = _urllib_request.Request(
+        api_url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {daily_api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _urllib_request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            created_url: str = data.get("url", "")
+            if created_url:
+                logger.info(f"Auto-created Daily room: {created_url}")
+                return created_url
+    except _urllib_error.HTTPError as http_err:
+        detail = http_err.read().decode("utf-8", errors="ignore")
+        logger.error(f"Daily room creation failed ({http_err.code}): {detail}")
+    except Exception as exc:
+        logger.error(f"Daily room creation failed: {exc}")
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 async def main():
@@ -225,7 +285,10 @@ async def main():
     # ── Config ──────────────────────────────────────────────────────────────
     daily_room_url = os.environ.get("DAILY_ROOM_URL", "")
     daily_token = os.environ.get("DAILY_TOKEN", "")
+    daily_api_key = os.environ.get("DAILY_API_KEY", "")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+
+    daily_room_url = create_daily_room_if_needed(daily_room_url, daily_api_key)
 
     ckpt_dir = os.environ.get("SOULX_CKPT_DIR", "models/SoulX-FlashHead-1_3B")
     wav2vec_dir = os.environ.get("SOULX_WAV2VEC_DIR", "models/wav2vec2-base-960h")
@@ -235,7 +298,7 @@ async def main():
     perception_interval = float(os.environ.get("PERCEPTION_INTERVAL", "3.0"))
 
     if not daily_room_url:
-        logger.error("DAILY_ROOM_URL must be set.")
+        logger.error("Set DAILY_ROOM_URL or DAILY_API_KEY.")
         return
     if not openai_api_key:
         logger.error("OPENAI_API_KEY must be set.")

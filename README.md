@@ -35,8 +35,9 @@ ln -s /path/to/SoulX-FlashHead/models models
 Create a `.env` file in the root of this repository:
 
 ```env
-# Daily.co (WebRTC transport — required)
-DAILY_ROOM_URL=https://your-domain.daily.co/your-room
+# Daily.co (WebRTC transport)
+DAILY_ROOM_URL=https://your-domain.daily.co/your-room  # optional if DAILY_API_KEY is set
+DAILY_API_KEY=your_daily_api_key                       # auto-creates a room if DAILY_ROOM_URL is empty
 DAILY_TOKEN=your_daily_participant_token   # optional — leave blank for open rooms
 
 # OpenAI (STT + LLM + TTS + Vision)
@@ -72,6 +73,8 @@ pip install -r requirements.txt && pip install -r requirements_pipecat.txt
 source .env
 python soulx_conversational_bot.py
 ```
+
+If `DAILY_ROOM_URL` is blank and `DAILY_API_KEY` is set, the bot auto-creates a Daily room at startup and logs the generated room URL.
 
 1. Look for `SoulX Model fully loaded and GPU is pre-warmed.` in the logs.
 2. Look for `Starting SoulX Conversational Brain in Daily.co room: …` in the logs.
