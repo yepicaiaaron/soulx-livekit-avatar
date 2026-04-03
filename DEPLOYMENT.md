@@ -1,7 +1,7 @@
-# SoulX LiveKit Talking Head Avatar — Deployment Guide
+# SoulX Daily.co Talking Head Avatar — Deployment Guide
 
 This repository contains the integrated SoulX-FlashHead talking head avatar with:
-- **LiveKit** — WebRTC transport
+- **Daily.co** — WebRTC transport
 - **Pipecat** — real-time AI pipeline orchestration
 - **OpenAI** — Whisper STT, GPT-4o LLM (with tool calling), and TTS
 - **Perception Engine** — real-time visual analysis of webcam and screen-share feeds via OpenAI Vision
@@ -12,7 +12,7 @@ This repository contains the integrated SoulX-FlashHead talking head avatar with
 User speaks in WebRTC session
         │
         ▼
- LiveKit Transport (audio in, with Silero VAD)
+ Daily.co Transport (audio in, with Silero VAD)
         │
         ▼
  OpenAI Whisper STT          ← speech-to-text
@@ -21,9 +21,8 @@ User speaks in WebRTC session
  OpenAI GPT-4o LLM           ← conversational brain + tool calling
    ├─ get_current_time
    ├─ get_visual_context ─────► Perception Engine
-   │                               ├─ LiveKit video subscriber
-   │                               │   (webcam + screen-share tracks)
-   │                               └─ [Optional] Daily.co subscriber
+   │                               └─ Daily.co video subscriber
+   │                                   (webcam + screen-share tracks)
    └─ calculate
         │
         ▼
@@ -33,7 +32,7 @@ User speaks in WebRTC session
  WebRTCSyncPusher             ← SoulX-FlashHead avatar animation
         │                        (GPU inference: audio embedding → video frames)
         ▼
- LiveKit Transport (video + audio out)
+ Daily.co Transport (video + audio out)
         │
         ▼
 User sees lip-synced avatar speaking in real time
@@ -41,10 +40,9 @@ User sees lip-synced avatar speaking in real time
 
 ## Prerequisites
 
-1. **LiveKit Cloud or Self-Hosted** — LiveKit project URL, API Key, and API Secret.
+1. **Daily.co** — a Daily.co room URL, and optionally a participant token for private rooms.
 2. **OpenAI** — API key with access to Whisper, GPT-4o, and TTS.
 3. **SoulX-FlashHead models** — see README for symlink instructions.
-4. *(Optional)* **Daily.co** — room URL and participant token if you want the perception engine to join a Daily.co session.
 
 ## Deployment on Render.com
 
@@ -68,17 +66,13 @@ Push this codebase to a GitHub repository.
 | Key | Required | Value / Description |
 | :--- | :---: | :--- |
 | `OPENAI_API_KEY` | ✅ | OpenAI API key (Whisper STT + GPT-4o LLM + TTS). |
-| `LIVEKIT_URL` | ✅ | LiveKit project WebSocket URL (`wss://…`). |
-| `LIVEKIT_API_KEY` | ✅ | LiveKit API key. |
-| `LIVEKIT_API_SECRET` | ✅ | LiveKit API secret. |
-| `LIVEKIT_ROOM` | | Room name (default: `soulx-flashhead-room`). |
+| `DAILY_ROOM_URL` | ✅ | Daily.co room URL (`https://your-domain.daily.co/your-room`). |
+| `DAILY_TOKEN` | | *(Optional)* Daily.co participant token for private rooms. |
 | `SOULX_MODEL_TYPE` | | `lite` (default) or `pro`. |
 | `SOULX_CKPT_DIR` | | Path to model checkpoints (default: `./models/SoulX-FlashHead-1_3B`). |
 | `SOULX_WAV2VEC_DIR` | | Path to wav2vec directory (default: `./models/wav2vec2-base-960h`). |
 | `SOULX_COND_IMAGE` | | Avatar portrait image (default: `./examples/omani_character.png`). |
 | `PERCEPTION_INTERVAL` | | Seconds between Vision-API analyses (default: `3.0`). |
-| `DAILY_ROOM_URL` | | *(Optional)* Daily.co room URL for the perception engine. |
-| `DAILY_TOKEN` | | *(Optional)* Daily.co participant token. |
 | `ELEVENLABS_API_KEY` | | *(Legacy)* ElevenLabs key — not used by default pipeline. |
 | `DEEPGRAM_API_KEY` | | *(Legacy)* Deepgram key — not used by default pipeline. |
 
@@ -108,24 +102,14 @@ python soulx_conversational_bot.py
 python perception_engine.py
 ```
 
-Join the LiveKit room at [sandbox.livekit.io](https://sandbox.livekit.io/) to speak with the avatar in real time.
-
-## Perception Engine — Daily.co Support
-
-To enable Daily.co frame capture alongside LiveKit:
-
-```bash
-pip install daily-python
-```
-
-Then set `DAILY_ROOM_URL` (and optionally `DAILY_TOKEN`) in your environment. The bot will automatically use `DailyPerceptionEngine`, which joins both LiveKit and the Daily.co room simultaneously.
+Join your Daily.co room via the [Daily.co Prebuilt UI](https://www.daily.co/prebuilt/) or any Daily-compatible app to speak with the avatar in real time.
 
 ## Key Files
 
 | File | Description |
 | :--- | :--- |
-| `soulx_conversational_bot.py` | **Main entry point.** Full Pipecat pipeline: LiveKit audio in → STT → LLM → TTS → SoulX avatar. |
-| `perception_engine.py` | **Perception engine.** LiveKit video subscriber + optional Daily.co support + OpenAI Vision analysis. |
-| `webrtc_sync.py` | **Avatar pusher.** `WebRTCSyncPusher` FrameProcessor — drives SoulX-FlashHead GPU inference and publishes lip-synced video+audio to LiveKit. |
-| `requirements_pipecat.txt` | Pipecat, LiveKit, and AI service dependencies. |
+| `soulx_conversational_bot.py` | **Main entry point.** Full Pipecat pipeline: Daily.co audio in → STT → LLM → TTS → SoulX avatar. |
+| `perception_engine.py` | **Perception engine.** Daily.co video subscriber + OpenAI Vision analysis. |
+| `webrtc_sync.py` | **Avatar pusher.** `WebRTCSyncPusher` FrameProcessor — drives SoulX-FlashHead GPU inference and publishes lip-synced video+audio to Daily.co. |
+| `requirements_pipecat.txt` | Pipecat, Daily.co, and AI service dependencies. |
 | `render.yaml` | Render.com deployment blueprint. |

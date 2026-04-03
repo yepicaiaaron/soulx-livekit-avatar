@@ -10,10 +10,9 @@ from pipecat.frames.frames import AudioRawFrame, StartFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
-from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
+from pipecat.transports.daily.transport import DailyTransport, DailyParams
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
-from livekit import api, rtc
 import torch
 from flash_head.inference import get_pipeline, get_base_data, get_infer_params, get_audio_embedding, run_pipeline
 
@@ -34,12 +33,6 @@ class WebRTCSyncPusher(FrameProcessor):
         self.motion_frames_num = infer_params['motion_frames_num']
         self.slice_len = self.frame_num - self.motion_frames_num
         
-        self.video_source = rtc.VideoSource(self.width, self.height)
-        self.video_track = rtc.LocalVideoTrack.create_video_track("bot-video", self.video_source)
-        
-        self.audio_source = rtc.AudioSource(self.sample_rate, 1)
-        self.audio_track = rtc.LocalAudioTrack.create_audio_track("bot-audio", self.audio_source)
-        
         self.cached_audio_length_sum = self.sample_rate * self.cached_audio_duration
         self.audio_end_idx = self.cached_audio_duration * self.tgt_fps
         self.audio_start_idx = self.audio_end_idx - self.frame_num
@@ -59,16 +52,12 @@ class WebRTCSyncPusher(FrameProcessor):
         else:
             idle_img = cv2.resize(idle_img, (512, 512))
         self.idle_rgba = cv2.cvtColor(idle_img, cv2.COLOR_BGR2RGBA)
-        self.idle_vf = rtc.VideoFrame(self.idle_rgba.shape[1], self.idle_rgba.shape[0], rtc.VideoBufferType.RGBA, self.idle_rgba.tobytes())
-        
-        self.silent_audio_frame = rtc.AudioFrame(
-            data=np.zeros(int(self.sample_rate // self.tgt_fps), dtype=np.int16).tobytes(),
-            sample_rate=self.sample_rate,
-            num_channels=1,
-            samples_per_channel=int(self.sample_rate // self.tgt_fps)
-        )
         
         self.is_publishing = False
+
+    def _get_daily_call_client(self):
+        """Return the underlying daily.CallClient from the pipecat DailyTransport."""
+        return self.transport._client._call_client
 
     async def _generation_loop(self):
         logger.info("Starting background GPU generation loop...")
@@ -147,18 +136,19 @@ class WebRTCSyncPusher(FrameProcessor):
             await self.push_frame(frame, direction)
 
     async def _video_loop(self):
-        logger.info("Waiting for room to connect before publishing media...")
-        while not hasattr(self.transport._client, "_room") or self.transport._client._room is None or not self.transport._client._room.isconnected():
+        from daily import VideoFrame as DailyVideoFrame, AudioData as DailyAudioData
+
+        logger.info("Waiting for Daily.co room to connect before publishing media...")
+        while True:
+            try:
+                call_client = self._get_daily_call_client()
+                if call_client is not None and str(call_client.state()) == "joined":
+                    break
+            except Exception:
+                pass
             await asyncio.sleep(0.5)
-            
-        room = self.transport._client._room
-        
-        v_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-        await room.local_participant.publish_track(self.video_track, v_options)
-        
-        a_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        await room.local_participant.publish_track(self.audio_track, a_options)
-        
+
+        call_client = self._get_daily_call_client()
         logger.info("Starting perfectly synced playback loop...")
         
         while True:
@@ -173,19 +163,28 @@ class WebRTCSyncPusher(FrameProcessor):
                 if len(self.playback_queue) > 0:
                     rgba, audio_bytes = self.playback_queue.popleft()
                     
-                    vf = rtc.VideoFrame(rgba.shape[1], rgba.shape[0], rtc.VideoBufferType.RGBA, rgba.tobytes())
-                    self.video_source.capture_frame(vf)
+                    vf = DailyVideoFrame(
+                        buffer=rgba.tobytes(),
+                        width=int(rgba.shape[1]),
+                        height=int(rgba.shape[0]),
+                        color_format="RGBA",
+                    )
+                    await asyncio.to_thread(call_client.send_video_frame, vf)
                     
-                    af = rtc.AudioFrame(
-                        data=bytes(audio_bytes),
+                    af = DailyAudioData(
+                        audio_data=bytes(audio_bytes),
                         sample_rate=self.sample_rate,
                         num_channels=1,
-                        samples_per_channel=len(audio_bytes) // 2
                     )
-                    await self.audio_source.capture_frame(af)
+                    await asyncio.to_thread(call_client.send_audio, af)
                 else:
-                    vf = rtc.VideoFrame(self.idle_rgba.shape[1], self.idle_rgba.shape[0], rtc.VideoBufferType.RGBA, self.idle_rgba.tobytes())
-                    self.video_source.capture_frame(vf)
+                    vf = DailyVideoFrame(
+                        buffer=self.idle_rgba.tobytes(),
+                        width=int(self.idle_rgba.shape[1]),
+                        height=int(self.idle_rgba.shape[0]),
+                        color_format="RGBA",
+                    )
+                    await asyncio.to_thread(call_client.send_video_frame, vf)
                     await asyncio.sleep(0.04)
                     continue
                     
@@ -197,29 +196,35 @@ class WebRTCSyncPusher(FrameProcessor):
             await asyncio.sleep(sleep_time)
 
 async def main():
+    from dotenv import load_dotenv
+    load_dotenv()
+
     try:
-        url = 'wss://chatgptme-sp76gr03.livekit.cloud'
-        api_key = 'API6pGtbWcmZpMs'
-        api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA = 'dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA'
-        room_name = 'soulx-flashhead-room'
+        from pipecat.vad.silero import SileroVADAnalyzer
+        from pipecat.vad.vad_analyzer import VADParams
 
-        token = api.AccessToken(api_key, api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA) \
-            .with_identity('soulx-video-bot') \
-            .with_name('SoulX Avatar') \
-            .with_grants(api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True)) \
-            .to_jwt()
+        daily_room_url = os.environ.get("DAILY_ROOM_URL", "")
+        daily_token = os.environ.get("DAILY_TOKEN", "")
 
-        transport = LiveKitTransport(
-            url=url, 
-            room_name=room_name,
-            token=token,
-            params=LiveKitParams(
+        if not daily_room_url:
+            logger.error("DAILY_ROOM_URL must be set.")
+            return
+
+        transport = DailyTransport(
+            room_url=daily_room_url,
+            token=daily_token or None,
+            bot_name="SoulX Avatar",
+            params=DailyParams(
                 audio_in_enabled=True,
-                audio_out_enabled=False, 
-                video_out_enabled=False, 
+                audio_out_enabled=True,
+                camera_out_enabled=True,
+                camera_out_width=512,
+                camera_out_height=512,
+                camera_out_framerate=25,
+                camera_out_color_format="RGBA",
                 vad_enabled=False,
                 audio_in_sample_rate=16000,
-                audio_out_sample_rate=16000
+                audio_out_sample_rate=16000,
             )
         )
         
@@ -239,7 +244,6 @@ async def main():
         tgt_fps = infer_params['tgt_fps']
         cached_audio_duration = infer_params['cached_audio_duration']
         frame_num = infer_params['frame_num']
-        motion_frames_num = infer_params['motion_frames_num']
         
         cached_audio_length_sum = sample_rate * cached_audio_duration
         audio_end_idx = cached_audio_duration * tgt_fps
@@ -256,14 +260,15 @@ async def main():
 
         pipeline = Pipeline([
             transport.input(),
-            pusher
+            pusher,
+            transport.output(),
         ])
 
         task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=False), idle_timeout_secs=None)
         
         runner = PipelineRunner()
         
-        logger.info(f'Starting CONTINUOUS WebRTC streaming bot in {room_name}...')
+        logger.info(f'Starting CONTINUOUS WebRTC streaming bot in Daily.co room...')
         await runner.run(task)
 
     except Exception as e:
