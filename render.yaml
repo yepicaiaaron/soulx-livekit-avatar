@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: soulx-livekit-avatar
+    name: soulx-daily-avatar
     runtime: python
     buildCommand: "pip install -r requirements.txt && pip install -r requirements_pipecat.txt"
     startCommand: "python soulx_conversational_bot.py"
@@ -11,14 +11,10 @@ services:
         sync: false
       - key: DEEPGRAM_API_KEY
         sync: false
-      - key: LIVEKIT_URL
+      - key: DAILY_ROOM_URL
         sync: false
-      - key: LIVEKIT_API_KEY
+      - key: DAILY_TOKEN
         sync: false
-      - key: LIVEKIT_API_SECRET
-        sync: false
-      - key: LIVEKIT_ROOM
-        value: soulx-flashhead-room
       - key: SOULX_MODEL_TYPE
         value: lite
       - key: SOULX_CKPT_DIR
@@ -29,7 +25,3 @@ services:
         value: ./examples/omani_character.png
       - key: PERCEPTION_INTERVAL
         value: "3.0"
-      - key: DAILY_ROOM_URL
-        sync: false
-      - key: DAILY_TOKEN
-        sync: false

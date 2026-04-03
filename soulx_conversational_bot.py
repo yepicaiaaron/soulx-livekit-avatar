@@ -2,14 +2,13 @@
 
 Full real-time pipeline orchestrated by Pipecat:
   User speaks via WebRTC → OpenAI Whisper STT → GPT-4o LLM (tool calling)
-  → OpenAI TTS → WebRTCSyncPusher (SoulX avatar lip-sync + LiveKit publish)
+  → OpenAI TTS → WebRTCSyncPusher (SoulX avatar lip-sync + Daily.co publish)
 
 Environment variables (see .env or Render dashboard):
-  LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+  DAILY_ROOM_URL, DAILY_TOKEN
   OPENAI_API_KEY
   SOULX_MODEL_TYPE (lite|pro), SOULX_CKPT_DIR, SOULX_WAV2VEC_DIR
   SOULX_COND_IMAGE        path to avatar portrait (default: examples/omani_character.png)
-  LIVEKIT_ROOM            room name (default: soulx-flashhead-room)
   PERCEPTION_INTERVAL     seconds between visual analyses (default: 3.0)
 """
 
@@ -34,7 +33,7 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
-from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
+from pipecat.transports.daily.transport import DailyTransport, DailyParams
 from pipecat.services.openai import OpenAISTTService, OpenAILLMService, OpenAITTSService
 from pipecat.processors.aggregators.openai_llm_context import (
     OpenAILLMContext,
@@ -42,8 +41,6 @@ from pipecat.processors.aggregators.openai_llm_context import (
 )
 from pipecat.vad.silero import SileroVADAnalyzer
 from pipecat.vad.vad_analyzer import VADParams
-
-from livekit import api as livekit_api
 
 from webrtc_sync import WebRTCSyncPusher
 from flash_head.inference import (
@@ -53,7 +50,7 @@ from flash_head.inference import (
     get_audio_embedding,
     run_pipeline,
 )
-from perception_engine import PerceptionEngine, DailyPerceptionEngine
+from perception_engine import PerceptionEngine
 
 load_dotenv()
 
@@ -226,10 +223,8 @@ async def main():
     load_dotenv()
 
     # ── Config ──────────────────────────────────────────────────────────────
-    livekit_url = os.environ.get("LIVEKIT_URL", "wss://chatgptme-sp76gr03.livekit.cloud")
-    livekit_api_key = os.environ.get("LIVEKIT_API_KEY", "")
-    livekit_api_secret = os.environ.get("LIVEKIT_API_SECRET", "")
-    room_name = os.environ.get("LIVEKIT_ROOM", "soulx-flashhead-room")
+    daily_room_url = os.environ.get("DAILY_ROOM_URL", "")
+    daily_token = os.environ.get("DAILY_TOKEN", "")
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 
     ckpt_dir = os.environ.get("SOULX_CKPT_DIR", "models/SoulX-FlashHead-1_3B")
@@ -237,42 +232,28 @@ async def main():
     model_type = os.environ.get("SOULX_MODEL_TYPE", "lite")
     cond_image = os.environ.get("SOULX_COND_IMAGE", "examples/omani_character.png")
 
-    daily_room_url = os.environ.get("DAILY_ROOM_URL", "")
-    daily_token = os.environ.get("DAILY_TOKEN", "")
     perception_interval = float(os.environ.get("PERCEPTION_INTERVAL", "3.0"))
 
-    if not livekit_api_key or not livekit_api_secret:
-        logger.error("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set.")
+    if not daily_room_url:
+        logger.error("DAILY_ROOM_URL must be set.")
         return
     if not openai_api_key:
         logger.error("OPENAI_API_KEY must be set.")
         return
 
-    # ── LiveKit transport ────────────────────────────────────────────────────
-    token = (
-        livekit_api.AccessToken(livekit_api_key, livekit_api_secret)
-        .with_identity("soulx-brain-bot")
-        .with_name("SoulX Avatar")
-        .with_grants(
-            livekit_api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=True,
-                can_subscribe=True,
-                can_publish_data=True,
-            )
-        )
-        .to_jwt()
-    )
-
-    transport = LiveKitTransport(
-        url=livekit_url,
-        room_name=room_name,
-        token=token,
-        params=LiveKitParams(
+    # ── Daily.co transport ───────────────────────────────────────────────────
+    transport = DailyTransport(
+        room_url=daily_room_url,
+        token=daily_token or None,
+        bot_name="SoulX Avatar",
+        params=DailyParams(
             audio_in_enabled=True,
-            audio_out_enabled=False,
-            video_out_enabled=False,
+            audio_out_enabled=True,
+            camera_out_enabled=True,
+            camera_out_width=512,
+            camera_out_height=512,
+            camera_out_framerate=25,
+            camera_out_color_format="RGBA",
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
             audio_in_sample_rate=16000,
@@ -301,27 +282,12 @@ async def main():
     context_aggregator = llm.create_context_aggregator(context)
 
     # ── Perception engine ────────────────────────────────────────────────────
-    if daily_room_url:
-        logger.info(f"Perception engine will also join Daily.co room: {daily_room_url}")
-        perception = DailyPerceptionEngine(
-            daily_room_url=daily_room_url,
-            daily_token=daily_token or None,
-            livekit_url=livekit_url,
-            api_key=livekit_api_key,
-            api_secret=livekit_api_secret,
-            room_name=room_name,
-            openai_api_key=openai_api_key,
-            capture_interval_secs=perception_interval,
-        )
-    else:
-        perception = PerceptionEngine(
-            livekit_url=livekit_url,
-            api_key=livekit_api_key,
-            api_secret=livekit_api_secret,
-            room_name=room_name,
-            openai_api_key=openai_api_key,
-            capture_interval_secs=perception_interval,
-        )
+    perception = PerceptionEngine(
+        daily_room_url=daily_room_url,
+        daily_token=daily_token or None,
+        openai_api_key=openai_api_key,
+        capture_interval_secs=perception_interval,
+    )
 
     # ── Register tool handlers ───────────────────────────────────────────────
     handlers = make_tool_handlers(perception)
@@ -349,12 +315,12 @@ async def main():
 
     # ── Build pipeline ───────────────────────────────────────────────────────
     #
-    #   LiveKit audio in (with VAD)
+    #   Daily.co audio in (with VAD)
     #     → OpenAI Whisper STT             (audio → transcript)
     #     → LLM context aggregator (user)  (transcript → LLMMessagesFrame)
     #     → GPT-4o LLM with tool calling   (LLMMessagesFrame → text + tool calls)
     #     → OpenAI TTS                     (text → AudioRawFrame @ 16 kHz)
-    #     → WebRTCSyncPusher               (AudioRawFrame → avatar video + audio in LiveKit)
+    #     → WebRTCSyncPusher               (AudioRawFrame → avatar video + audio in Daily.co)
     #     → LLM context aggregator (asst)  (assistant turn bookkeeping)
     #
     pipeline = Pipeline(
@@ -377,7 +343,7 @@ async def main():
     runner = PipelineRunner()
 
     # Start perception engine concurrently with the pipeline
-    logger.info(f"Starting SoulX Conversational Brain in LiveKit room: {room_name}")
+    logger.info(f"Starting SoulX Conversational Brain in Daily.co room: {daily_room_url}")
     await asyncio.gather(
         perception.start(),
         runner.run(task),
