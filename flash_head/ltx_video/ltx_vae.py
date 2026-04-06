@@ -1,5 +1,5 @@
 import torch
-from flash_head.ltx_video.models.autoencoders.causal_video_autoencoder import CausalVideoAutoencoder
+from ltx_video.models.autoencoders.causal_video_autoencoder import CausalVideoAutoencoder
 
 
 class LtxVAE:

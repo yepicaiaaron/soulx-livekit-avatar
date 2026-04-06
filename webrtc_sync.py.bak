@@ -1,0 +1,325 @@
+import asyncio
+import os
+import numpy as np
+import cv2
+import time
+from loguru import logger
+import collections
+
+from pipecat.frames.frames import (
+    OutputAudioRawFrame,
+    StartFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    BotInterruptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
+from pipecat.transports.daily.transport import DailyTransport, DailyParams
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+
+import torch
+from flash_head.inference import (
+    get_pipeline, get_base_data, get_infer_params,
+    get_audio_embedding, run_pipeline,
+)
+
+# ── Avatar mode ──────────────────────────────────────────────────────────────
+LISTENING = "listening"
+SPEAKING  = "speaking"
+
+# Idle animation tuning
+IDLE_NOISE_AMP          = 0.02   # keeps motion subtle but visible
+IDLE_ANIMATION_MULT     = 3.0    # boost multiplier so low-energy noise creates real movement
+SPEAKING_ANIMATION_MULT = 1.5
+
+# Idle frame buffer: pre-generate this many frames ahead (~2s at 25fps)
+IDLE_BUFFER_TARGET = 50
+IDLE_BUFFER_MAX    = 200
+
+# Speaking buffer: drop old frames if backlog exceeds this (~4s)
+SPEAKING_OVERFLOW_MAX  = 100
+SPEAKING_OVERFLOW_TRIM = 10
+
+
+class WebRTCSyncPusher(FrameProcessor):
+
+    def __init__(self, transport, model_pipeline, **kwargs):
+        super().__init__(**kwargs)
+        self.transport      = transport
+        self.model_pipeline = model_pipeline
+
+        infer_params = get_infer_params()
+        self.sample_rate           = infer_params['sample_rate']
+        self.tgt_fps               = infer_params['tgt_fps']
+        self.cached_audio_duration = infer_params['cached_audio_duration']
+        self.frame_num             = infer_params['frame_num']
+        self.motion_frames_num     = infer_params['motion_frames_num']
+        self.slice_len             = self.frame_num - self.motion_frames_num
+
+        self.cached_audio_length_sum = self.sample_rate * self.cached_audio_duration
+        self.audio_end_idx   = self.cached_audio_duration * self.tgt_fps
+        self.audio_start_idx = self.audio_end_idx - self.frame_num
+
+        # Audio sliding-window contexts — kept separate so idle never contaminates speech
+        self.audio_dq = collections.deque(
+            [0.0] * self.cached_audio_length_sum, maxlen=self.cached_audio_length_sum
+        )
+        self.idle_audio_dq = collections.deque(
+            [0.0] * self.cached_audio_length_sum, maxlen=self.cached_audio_length_sum
+        )
+
+        # Samples per GPU inference call
+        self.audio_slice_samples = self.slice_len * self.sample_rate // self.tgt_fps
+
+        # Incoming TTS audio accumulation (deques: O(1) append/popleft)
+        self._float_buf = collections.deque()   # float32 samples
+        self._bytes_buf = collections.deque()   # raw PCM bytes (one byte per element)
+
+        # SPEAKING: (rgba_ndarray, audio_bytes) pairs ready for playback
+        self.playback_queue = collections.deque()
+        # LISTENING: pre-generated idle animation frames (video only)
+        self.idle_buffer    = collections.deque(maxlen=IDLE_BUFFER_MAX)
+
+        # TTS audio chunks waiting for GPU inference
+        self.generation_queue = asyncio.Queue()
+
+        # Mode state
+        self.mode          = LISTENING
+        self._bot_speaking = False
+
+        # Interrupt serial — incremented on every interruption so the generation
+        # loop can detect that its in-progress result is stale and discard it.
+        self._generation_serial = 0
+
+        # Load fallback idle image
+        idle_img_path = os.environ.get("SOULX_COND_IMAGE", "examples/omani_character.png")
+        idle_img = cv2.imread(idle_img_path)
+        if idle_img is None:
+            idle_img = np.zeros((512, 512, 3), dtype=np.uint8)
+        else:
+            idle_img = cv2.resize(idle_img, (512, 512))
+        self.idle_rgba = cv2.cvtColor(idle_img, cv2.COLOR_BGR2RGBA)
+
+        self._publishing = False
+
+    # ── Internals ────────────────────────────────────────────────────────────
+
+    def _get_media_sources(self):
+        tc = self.transport._client
+        return tc._camera_track.source, tc._microphone_track.source
+
+    def _is_daily_joined(self):
+        try:
+            return self.transport._client._joined
+        except AttributeError:
+            return False
+
+    def _flush_buffers(self):
+        """Discard all pending TTS audio and queued GPU work. Called on interruption."""
+        self._float_buf.clear()
+        self._bytes_buf.clear()
+        self.playback_queue.clear()
+        # Drain the async queue synchronously (safe — we're in the event loop)
+        while not self.generation_queue.empty():
+            try:
+                self.generation_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    # ── GPU generation loop ──────────────────────────────────────────────────
+
+    async def _generation_loop(self):
+        logger.info("[GEN] GPU generation loop started")
+
+        while True:
+            # Priority 1 — real TTS audio
+            try:
+                chunk_floats, chunk_bytes = self.generation_queue.get_nowait()
+                is_idle = False
+            except asyncio.QueueEmpty:
+                # Priority 2 — idle animation when buffer needs refill
+                if len(self.idle_buffer) < IDLE_BUFFER_TARGET:
+                    chunk_floats = (
+                        np.random.randn(self.audio_slice_samples).astype(np.float32)
+                        * IDLE_NOISE_AMP
+                    )
+                    chunk_bytes = bytes(self.audio_slice_samples * 2)
+                    is_idle = True
+                else:
+                    # Nothing to do — yield briefly and check again
+                    await asyncio.sleep(0.02)
+                    continue
+
+            dq   = self.idle_audio_dq if is_idle else self.audio_dq
+            mult = IDLE_ANIMATION_MULT if is_idle else SPEAKING_ANIMATION_MULT
+
+            dq.extend(chunk_floats.tolist())
+            audio_array = np.array(dq)
+
+            # Snapshot serial BEFORE launching the thread so we can detect
+            # an interruption that occurred while the GPU was running.
+            serial_before = self._generation_serial
+
+            try:
+                def run_infer(arr=audio_array, m=mult):
+                    torch.cuda.synchronize()
+                    emb = get_audio_embedding(
+                        self.model_pipeline, arr,
+                        self.audio_start_idx, self.audio_end_idx,
+                    )
+                    emb = emb * m
+                    video = run_pipeline(self.model_pipeline, emb)
+                    torch.cuda.synchronize()
+                    return video.cpu().numpy()
+
+                video_np = await asyncio.to_thread(run_infer)
+
+            except Exception as e:
+                logger.error(f"[GEN] Inference error (idle={is_idle}): {e}")
+                continue
+
+            # Discard speaking frames that were generated for an interrupted turn
+            if not is_idle and self._generation_serial != serial_before:
+                logger.debug("[GEN] Discarding stale speaking frames (interrupted during inference)")
+                continue
+
+            num_frames      = video_np.shape[0]
+            bytes_per_frame = max(len(chunk_bytes) // num_frames, 1)
+
+            for i in range(num_frames):
+                vf = video_np[i]
+                if vf.shape[0] == 3:
+                    vf = np.transpose(vf, (1, 2, 0))
+                if vf.dtype != np.uint8:
+                    vf = vf.astype(np.uint8)
+                rgba = cv2.cvtColor(vf, cv2.COLOR_RGB2RGBA)
+
+                if is_idle:
+                    self.idle_buffer.append(rgba)
+                else:
+                    start = i * bytes_per_frame
+                    self.playback_queue.append((rgba, chunk_bytes[start:start + bytes_per_frame]))
+
+    # ── Pipecat frame processor ──────────────────────────────────────────────
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+
+        # Start background tasks on first frame
+        if not self._publishing:
+            self._publishing = True
+            logger.info("[PUSHER] Launching video loop and generation loop")
+            asyncio.create_task(self._video_loop())
+            asyncio.create_task(self._generation_loop())
+
+        # ── Interruption — highest priority ──────────────────────────────
+        if isinstance(frame, BotInterruptionFrame):
+            logger.info("[AVATAR] ⚡ Interrupted — flushing queues, returning to LISTENING")
+            self._generation_serial += 1
+            self._bot_speaking = False
+            self.mode = LISTENING
+            self._flush_buffers()
+            # Fall through: push the frame so downstream processors see it too
+
+        # ── Mode transitions ─────────────────────────────────────────────
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+            self.mode = SPEAKING
+            logger.info("[AVATAR MODE] ▶ SPEAKING")
+
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+            logger.info("[AVATAR MODE] ⏸ TTS done — returning to LISTENING once queue drains")
+
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            logger.info("[USER] 🎙 started speaking")
+
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            logger.info("[USER] 🎙 stopped speaking")
+
+        # ── TTS audio: accumulate and enqueue for GPU ─────────────────────
+        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, OutputAudioRawFrame):
+            audio_data = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float32) / 32768.0
+            self._float_buf.extend(audio_data.tolist())
+            self._bytes_buf.extend(frame.audio)
+
+            while len(self._float_buf) >= self.audio_slice_samples:
+                # Pull exactly one slice worth of samples from the front of both buffers
+                n = self.audio_slice_samples
+                chunk_floats = np.array(
+                    [self._float_buf.popleft() for _ in range(n)], dtype=np.float32
+                )
+                chunk_bytes = bytes(
+                    [self._bytes_buf.popleft() for _ in range(n * 2)]
+                )
+                await self.generation_queue.put((chunk_floats, chunk_bytes))
+        else:
+            await self.push_frame(frame, direction)
+
+    # ── Video / audio playback loop ──────────────────────────────────────────
+
+    async def _video_loop(self):
+        logger.info("[VIDEO] Waiting for Daily.co room to join...")
+        while not self._is_daily_joined():
+            await asyncio.sleep(0.5)
+
+        try:
+            camera_source, mic_source = self._get_media_sources()
+        except AttributeError as e:
+            logger.error(f"[VIDEO] Cannot get media sources: {e}")
+            return
+
+        logger.info("[VIDEO] Starting dual-mode playback loop")
+        fallback_bytes = self.idle_rgba.tobytes()
+        silence_chunk  = bytes(self.audio_slice_samples * 2)
+        idle_idx       = 0
+
+        while True:
+            start_time = time.monotonic()
+
+            try:
+                # ── Speaking mode ─────────────────────────────────────────
+                if len(self.playback_queue) > 0:
+
+                    # Overflow guard: if queue is absurdly deep, we've lagged
+                    if len(self.playback_queue) > SPEAKING_OVERFLOW_MAX:
+                        logger.warning(f"[VIDEO] Playback queue overflow ({len(self.playback_queue)}) — trimming")
+                        while len(self.playback_queue) > SPEAKING_OVERFLOW_TRIM:
+                            self.playback_queue.popleft()
+
+                    rgba, audio_bytes = self.playback_queue.popleft()
+                    await asyncio.gather(
+                        asyncio.to_thread(camera_source.write_frame, rgba.tobytes()),
+                        asyncio.to_thread(mic_source.write_frames, bytes(audio_bytes)),
+                    )
+
+                    # Transition to LISTENING once both queues drain
+                    if (len(self.playback_queue) == 0
+                            and self.generation_queue.empty()
+                            and not self._bot_speaking):
+                        self.mode = LISTENING
+                        logger.info("[AVATAR MODE] 👂 LISTENING (queue drained)")
+
+                # ── Listening mode: cycle pre-generated idle frames ────────
+                elif len(self.idle_buffer) > 0:
+                    buf_len  = len(self.idle_buffer)
+                    idle_idx = (idle_idx + 1) % buf_len
+                    rgba     = self.idle_buffer[idle_idx]
+                    await asyncio.gather(
+                        asyncio.to_thread(camera_source.write_frame, rgba.tobytes()),
+                        asyncio.to_thread(mic_source.write_frames, silence_chunk),
+                    )
+
+                # ── Fallback: static image while first idle frames generate ─
+                else:
+                    await asyncio.gather(
+                        asyncio.to_thread(camera_source.write_frame, fallback_bytes),
+                        asyncio.to_thread(mic_source.write_frames, silence_chunk),
+                    )
+
+            except Exception as e:
+                logger.error(f"[VIDEO] Playback error: {e}")
+
+            elapsed = time.monotonic() - start_time
+            await asyncio.sleep(max(0.0, (1.0 / self.tgt_fps) - elapsed))

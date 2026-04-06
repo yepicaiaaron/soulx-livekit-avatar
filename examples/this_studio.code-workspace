@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"terminal.integrated.drawBoldTextInBrightColors": false,
+		"terminal.integrated.gpuAcceleration": "on",
+		"terminal.integrated.localEchoLatencyThreshold": 0,
+		"terminal.integrated.localEchoEnabled": "off",
+		"terminal.integrated.localEchoStyle": "#000000",
+		"remote.autoForwardPorts": false,
+		"terminal.integrated.enableMultiLinePasteWarning": "never",
+		"files.associations": {
+			"*.studiorc": "shellscript"
+		},
+		"files.enableTrash": false
+	}
+}

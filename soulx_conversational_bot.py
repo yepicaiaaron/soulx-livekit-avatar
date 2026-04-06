@@ -26,23 +26,17 @@ from datetime import datetime
 from dotenv import load_dotenv
 from loguru import logger
 
-from pipecat.frames.frames import (
-    AudioRawFrame,
-    StartFrame,
-    LLMMessagesFrame,
-    FunctionCallResultFrame,
-)
+from pipecat.frames.frames import BotInterruptionFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask, PipelineParams
 from pipecat.transports.daily.transport import DailyTransport, DailyParams
-from pipecat.services.openai import OpenAISTTService, OpenAILLMService, OpenAITTSService
-from pipecat.processors.aggregators.openai_llm_context import (
-    OpenAILLMContext,
-    OpenAILLMContextAggregator,
-)
-from pipecat.vad.silero import SileroVADAnalyzer
-from pipecat.vad.vad_analyzer import VADParams
+from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.tts import OpenAITTSService
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext, OpenAILLMContextFrame
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 
 from webrtc_sync import WebRTCSyncPusher
 from flash_head.inference import (
@@ -53,6 +47,38 @@ from flash_head.inference import (
     run_pipeline,
 )
 from perception_engine import PerceptionEngine
+
+# ---------------------------------------------------------------------------
+# Inline 24kHz → 16kHz resampler (OpenAI TTS outputs 24kHz, SoulX needs 16kHz)
+# ---------------------------------------------------------------------------
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+
+
+# ---------------------------------------------------------------------------
+# STT transcription logger — logs every user utterance to the session log
+# ---------------------------------------------------------------------------
+from pipecat.frames.frames import TranscriptionFrame as _TranscriptionFrame
+from pipecat.frames.frames import TTSTextFrame as _TTSTextFrame
+
+class STTLoggingProcessor(FrameProcessor):
+    """Intercepts TranscriptionFrame and logs it before passing downstream."""
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, _TranscriptionFrame):
+            logger.info(f"[STT USER]   → \"{frame.text}\"")
+        await self.push_frame(frame, direction)
+
+
+class TTSLoggingProcessor(FrameProcessor):
+    """Intercepts TTSTextFrame (avatar response text) and logs it."""
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, _TTSTextFrame):
+            logger.info(f"[TTS AVATAR] ← \"{frame.text}\"")
+        await self.push_frame(frame, direction)
+
 
 load_dotenv()
 
@@ -312,29 +338,47 @@ async def main():
         params=DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            camera_out_enabled=True,
-            camera_out_width=512,
-            camera_out_height=512,
-            camera_out_framerate=25,
-            camera_out_color_format="RGBA",
+            video_out_enabled=True,
+            video_out_width=512,
+            video_out_height=512,
+            video_out_framerate=25,
+            video_out_color_format="RGBA",
             vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.5, start_secs=0.3)),
             audio_in_sample_rate=16000,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=24000,
         ),
     )
 
+    # ── Daily.co session event logging ──────────────────────────────────────
+    @transport.event_handler("on_first_participant_joined")
+    async def on_first_participant_joined(transport, participant):
+        name = participant.get("user_name") or participant.get("id", "unknown")
+        logger.info(f"[DAILY] ✅ First participant joined: {name}")
+
+    @transport.event_handler("on_participant_joined")
+    async def on_participant_joined(transport, participant):
+        name = participant.get("user_name") or participant.get("id", "unknown")
+        logger.info(f"[DAILY] 👤 Participant joined: {name}")
+
+    @transport.event_handler("on_participant_left")
+    async def on_participant_left(transport, participant, reason):
+        name = participant.get("user_name") or participant.get("id", "unknown")
+        logger.info(f"[DAILY] 🚪 Participant left: {name} (reason: {reason})")
+
     # ── AI services ──────────────────────────────────────────────────────────
+    tts_voice  = os.environ.get("SOULX_TTS_VOICE",  "nova")
+    llm_model  = os.environ.get("SOULX_LLM_MODEL",  "gpt-4o")
     stt = OpenAISTTService(api_key=openai_api_key, model="whisper-1")
 
-    llm = OpenAILLMService(api_key=openai_api_key, model="gpt-4o")
+    llm = OpenAILLMService(api_key=openai_api_key, model=llm_model)
 
-    # OpenAI TTS — sample_rate=16000 to match SoulX-FlashHead inference config
+    # OpenAI TTS — native 24 kHz output; WebRTCSyncPusher resamples to 16 kHz for GPU internally
     tts = OpenAITTSService(
         api_key=openai_api_key,
-        voice="alloy",
+        voice=tts_voice,
         model="tts-1",
-        sample_rate=16000,
+        sample_rate=24000,
     )
 
     # ── LLM context with tool definitions ────────────────────────────────────
@@ -382,19 +426,27 @@ async def main():
     #     → OpenAI Whisper STT             (audio → transcript)
     #     → LLM context aggregator (user)  (transcript → LLMMessagesFrame)
     #     → GPT-4o LLM with tool calling   (LLMMessagesFrame → text + tool calls)
-    #     → OpenAI TTS                     (text → AudioRawFrame @ 16 kHz)
-    #     → WebRTCSyncPusher               (AudioRawFrame → avatar video + audio in Daily.co)
+    #     → OpenAI TTS                     (text → AudioRawFrame @ 24 kHz)
+    #     → WebRTCSyncPusher               (intercepts audio, runs GPU inference,
+    #                                       pushes OutputImageRawFrame + OutputAudioRawFrame
+    #                                       downstream to DailyOutputTransport)
     #     → LLM context aggregator (asst)  (assistant turn bookkeeping)
     #
+    stt_logger = STTLoggingProcessor()
+    tts_logger = TTSLoggingProcessor()
+
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            stt_logger,
             context_aggregator.user(),
             llm,
             tts,
+            tts_logger,
             pusher,
             context_aggregator.assistant(),
+            transport.output(),
         ]
     )
 

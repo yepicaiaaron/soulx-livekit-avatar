@@ -152,11 +152,11 @@ class PerceptionEngine:
 
     def _start_daily_sync(self) -> None:
         """Blocking helper to initialise the Daily.co client (runs in a thread)."""
-        from daily import CallClient, Daily  # type: ignore[import]
+        from daily import CallClient, Daily, EventHandler  # type: ignore[import]
 
         perception_ref = self
 
-        class _DailyHandler:
+        class _DailyHandler(EventHandler):
             def on_participant_joined(self, participant) -> None:
                 logger.info(f"[Perception] Participant joined: {participant.get('id', 'unknown')}")
 
@@ -190,7 +190,16 @@ class PerceptionEngine:
                 except Exception as exc:
                     logger.warning(f"[Perception] Frame error ({participant_id}): {exc}")
 
-        Daily.init()
+        # Guard against double-init: pipecat's DailyTransportClient uses a class-level
+        # flag to call Daily.init() exactly once per process. Reuse that flag so the
+        # perception engine doesn't re-initialise the Daily Rust context and panic.
+        try:
+            from pipecat.transports.daily.transport import DailyTransportClient as _DTC
+            if not _DTC._daily_initialized:
+                _DTC._daily_initialized = True
+                Daily.init()
+        except ImportError:
+            Daily.init()  # pipecat not present — standalone mode
         self._daily_client = CallClient(event_handler=_DailyHandler())
 
         join_kwargs: dict = {"url": self.daily_room_url}
