@@ -60,7 +60,38 @@ python3 webrtc_sync.py
 2. Look for `Connected to soulx-flashhead-room`.
 3. Use a generated LiveKit JWT to join the room. **Important:** Generic Meet links without authenticated tokens will drop you into empty fallback rooms.
 
-## 🔮 Future Optimizations & Roadmap
-To push the performance boundary even further (and safely lower `frame_num` to 9 for sub-360ms latency), the following low-level updates are required:
-- **Flash Attention 3 Upgrade (YEP-49):** Rewrite the core attention blocks to use TMA asynchronously on Hopper/Blackwell hardware.
-- **Custom Triton Kernels (YEP-48):** Port the bare-metal Flash Norm and RoPE Triton kernels to eliminate the PyTorch eager math bottlenecks completely.
+## ⚡ Low-Latency Mode (YEP-48 + YEP-49) — IMPLEMENTED
+
+The sub-1s latency work from the roadmap is now in the tree:
+
+- **YEP-48 — Fused Triton kernels** (`flash_head/kernels/`): real-math fp32 RoPE
+  (replacing the complex-float64 eager path — the source of both the fp64
+  throughput cliff and the `FakeTensor` compile failures at small `frame_num`),
+  single-pass RMSNorm, and a fused AdaLN `LN(x)*(1+scale)+shift` kernel. The
+  RoPE op registers via `torch.library.custom_op`, so `torch.compile` treats it
+  as opaque and `frame_num: 9` compiles cleanly. Disable with
+  `FLASH_HEAD_FUSED_KERNELS=0`.
+- **YEP-49 — FlashAttention-3 first**: attention dispatch now prefers FA3
+  (TMA async pipeline on Hopper/Blackwell) over SageAttention/FA2/SDPA.
+  Override with `FLASH_HEAD_ATTN=fa3|sage|fa2|sdpa`. Build FA3 into the Docker
+  image with `--build-arg INSTALL_FA3=1`.
+- **Latency profiles** (`FLASH_HEAD_PROFILE`):
+  | Profile | frame_num | net new frames/chunk | chunk budget | audio lookahead |
+  |---|---|---|---|---|
+  | `default` | 33 | 28 | 1120 ms | 1320 ms |
+  | `balanced` | 13 | 8 | 320 ms | 520 ms |
+  | `lowlat` | 9 | 4 | 160 ms | 360 ms |
+
+### Live test (one command, on the GPU box)
+```bash
+cp .env.example .env   # fill in your (ROTATED) LiveKit credentials
+./deploy/live_test.sh  # gates: tests -> kernel parity -> quality PSNR A/B -> latency -> launch
+```
+The script refuses to launch unless fused kernels match eager numerics, the
+PSNR quality gate passes (eager-vs-fused ≥ 35 dB), and the GPU sustains the
+chosen profile's real-time budget; it auto-falls-back `lowlat → balanced` if
+the 160 ms budget doesn't hold on your hardware.
+
+> **Security note:** LiveKit credentials now come exclusively from the
+> environment. The key/secret previously hardcoded in `webrtc_sync.py` are in
+> git history — rotate them in the LiveKit dashboard.

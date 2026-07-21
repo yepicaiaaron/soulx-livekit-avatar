@@ -31,8 +31,49 @@ try:
     SAGE_ATTN_AVAILABLE = True
 except ModuleNotFoundError:
     SAGE_ATTN_AVAILABLE = False
-    
-    
+
+try:
+    from flash_head.kernels import (
+        kernels_enabled as _fused_kernels_enabled,
+        fused_rope as _fused_rope,
+        fused_rms_norm as _fused_rms_norm,
+        fused_modulated_layer_norm as _fused_mod_ln,
+        RopeTableCache as _RopeTableCache,
+    )
+    FUSED_KERNELS = _fused_kernels_enabled()
+except Exception:
+    FUSED_KERNELS = False
+
+_ROPE_TABLES = _RopeTableCache() if FUSED_KERNELS else None
+
+# YEP-49: attention backend selection. FA3 leads on Hopper/Blackwell — its
+# TMA-based async pipeline beats SageAttention's int8 path at this model's
+# head_dim (128) and sequence lengths. Override with
+# FLASH_HEAD_ATTN=fa3|sage|fa2|sdpa for A/B testing.
+import os as _os
+_ATTN_IMPL = _os.environ.get("FLASH_HEAD_ATTN", "auto").lower()
+
+
+def _pick_attn_backend():
+    order = {
+        "auto": ["fa3", "sage", "fa2", "sdpa"],
+        "fa3": ["fa3"], "sage": ["sage"], "fa2": ["fa2"], "sdpa": ["sdpa"],
+    }.get(_ATTN_IMPL, ["fa3", "sage", "fa2", "sdpa"])
+    for name in order:
+        if name == "fa3" and FLASH_ATTN_3_AVAILABLE:
+            return "fa3"
+        if name == "sage" and SAGE_ATTN_AVAILABLE:
+            return "sage"
+        if name == "fa2" and FLASH_ATTN_2_AVAILABLE:
+            return "fa2"
+        if name == "sdpa":
+            return "sdpa"
+    return "sdpa"
+
+
+_ATTN_BACKEND = _pick_attn_backend()
+
+
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
     if compatibility_mode:
         q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
@@ -40,19 +81,21 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads
         v = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
         x = F.scaled_dot_product_attention(q, k, v)
         x = rearrange(x, "b n s d -> b s (n d)", n=num_heads)
-    elif SAGE_ATTN_AVAILABLE:
+    elif _ATTN_BACKEND == "fa3":
+        q = rearrange(q, "b s (n d) -> b s n d", n=num_heads)
+        k = rearrange(k, "b s (n d) -> b s n d", n=num_heads)
+        v = rearrange(v, "b s (n d) -> b s n d", n=num_heads)
+        x = flash_attn_interface.flash_attn_func(q, k, v)
+        if isinstance(x, tuple):  # FA3 returns (out, lse) on some versions
+            x = x[0]
+        x = rearrange(x, "b s n d -> b s (n d)", n=num_heads)
+    elif _ATTN_BACKEND == "sage":
         q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
         k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
         v = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
         x = sageattn(q, k, v)
         x = rearrange(x, "b n s d -> b s (n d)", n=num_heads)
-    elif FLASH_ATTN_3_AVAILABLE:
-        q = rearrange(q, "b s (n d) -> b s n d", n=num_heads)
-        k = rearrange(k, "b s (n d) -> b s n d", n=num_heads)
-        v = rearrange(v, "b s (n d) -> b s n d", n=num_heads)
-        x = flash_attn_interface.flash_attn_func(q, k, v)
-        x = rearrange(x, "b s n d -> b s (n d)", n=num_heads)
-    elif FLASH_ATTN_2_AVAILABLE:
+    elif _ATTN_BACKEND == "fa2":
         q = rearrange(q, "b s (n d) -> b s n d", n=num_heads)
         k = rearrange(k, "b s (n d) -> b s n d", n=num_heads)
         v = rearrange(v, "b s (n d) -> b s n d", n=num_heads)
@@ -65,6 +108,12 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads
         x = F.scaled_dot_product_attention(q, k, v)
         x = rearrange(x, "b n s d -> b s (n d)", n=num_heads)
     return x
+
+
+def rope_apply_fused(x, freqs, grid_sizes):
+    """YEP-48 path: real-math Triton RoPE from cached fp32 cos/sin tables."""
+    cos, sin, seq_len = _ROPE_TABLES.get(freqs, grid_sizes, x.size(3), x.device)
+    return _fused_rope(x.contiguous(), cos, sin, seq_len)
 
 def sinusoidal_embedding_1d(dim, position):
     sinusoid = torch.outer(position.type(torch.float64), torch.pow(
@@ -150,6 +199,8 @@ class RMSNorm(nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def forward(self, x):
+        if FUSED_KERNELS and x.is_cuda:
+            return _fused_rms_norm(x, self.weight, self.eps)
         dtype = x.dtype
         return self.norm(x.float()).to(dtype) * self.weight
 
@@ -191,9 +242,15 @@ class SelfAttention(nn.Module):
                 value=v.view(b, s, n, d),
             ).flatten(2)
         else:
+            if FUSED_KERNELS:
+                q_rot = rope_apply_fused(q, freqs, grid_sizes).flatten(2)
+                k_rot = rope_apply_fused(k, freqs, grid_sizes).flatten(2)
+            else:
+                q_rot = rope_apply(q, freqs, grid_sizes).flatten(2)
+                k_rot = rope_apply(k, freqs, grid_sizes).flatten(2)
             x = flash_attention(
-                q=rope_apply(q, freqs, grid_sizes).flatten(2),
-                k=rope_apply(k, freqs, grid_sizes).flatten(2),
+                q=q_rot,
+                k=k_rot,
                 v=v,
                 num_heads=self.num_heads
             )
@@ -262,12 +319,26 @@ class DiTAudioBlock(nn.Module):
     def forward(self, x, context, t_mod, freqs, grid_sizes):
         e = (self.modulation.to(dtype=t_mod.dtype, device=t_mod.device) + t_mod).chunk(6, dim=1)
 
-        y = self.self_attn(
-            self.norm1(x) * (1 + e[1]) + e[0], freqs, grid_sizes)
+        # AdaLN modulation is a per-channel vector (batch-1 streaming); the
+        # fused LN+mod kernel needs that shape, so gate on it explicitly.
+        use_fused_ln = FUSED_KERNELS and x.is_cuda and e[0].numel() == self.dim
+
+        if use_fused_ln:
+            y = self.self_attn(
+                _fused_mod_ln(x, scale=e[1], shift=e[0], eps=self.norm1.eps),
+                freqs, grid_sizes)
+        else:
+            y = self.self_attn(
+                self.norm1(x) * (1 + e[1]) + e[0], freqs, grid_sizes)
 
         x = x + y * e[2]
 
-        x_1 = rearrange(self.norm3(x), 'b (f l) c -> (b f) l c', f=context.shape[1])
+        if use_fused_ln:
+            norm3_out = _fused_mod_ln(
+                x, weight=self.norm3.weight, bias=self.norm3.bias, eps=self.norm3.eps)
+        else:
+            norm3_out = self.norm3(x)
+        x_1 = rearrange(norm3_out, 'b (f l) c -> (b f) l c', f=context.shape[1])
         context_1 = context.squeeze(0)
 
         if self.use_usp:
@@ -276,7 +347,10 @@ class DiTAudioBlock(nn.Module):
 
         x = x + self.cross_attn(x_1, context_1).flatten(0, 1).unsqueeze(0)
 
-        y = self.ffn(self.norm2(x) * (1 + e[4]) + e[3])
+        if use_fused_ln:
+            y = self.ffn(_fused_mod_ln(x, scale=e[4], shift=e[3], eps=self.norm2.eps))
+        else:
+            y = self.ffn(self.norm2(x) * (1 + e[4]) + e[3])
         x = x + y * e[5]
 
         return x

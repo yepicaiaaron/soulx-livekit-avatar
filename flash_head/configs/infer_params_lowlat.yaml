@@ -1,0 +1,14 @@
+# Sub-1s latency profile (YEP-48/49). 9-frame chunks => 3 latents/chunk,
+# 4 net new frames per generation (160 ms @ 25fps) after the 5-frame motion
+# overlap. Requires the fused Triton kernels — the eager complex-fp64 RoPE
+# path breaks under torch.compile at this frame count.
+frame_num: 9
+motion_frames_latent_num: 2
+tgt_fps: 25
+sample_rate: 16000
+sample_shift: 5
+color_correction_strength: 1.0
+cached_audio_duration: 8
+num_heads: 12
+height: 512
+width: 512

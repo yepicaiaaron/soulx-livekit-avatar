@@ -72,9 +72,11 @@ class WebRTCSyncPusher(FrameProcessor):
 
     async def _generation_loop(self):
         logger.info("Starting background GPU generation loop...")
+        chunk_budget = self.slice_len / self.tgt_fps  # wall time available per chunk
         while True:
             chunk_floats, chunk_bytes = await self.generation_queue.get()
-            
+            gen_start = time.perf_counter()
+
             self.audio_dq.extend(chunk_floats.tolist())
             audio_array = np.array(self.audio_dq)
             
@@ -110,7 +112,16 @@ class WebRTCSyncPusher(FrameProcessor):
                     audio_slice = chunk_bytes[start:end]
                     
                     self.playback_queue.append((rgba, audio_slice))
-                    
+
+                gen_time = time.perf_counter() - gen_start
+                rtf = gen_time / chunk_budget if chunk_budget > 0 else float("inf")
+                level = "warning" if rtf > 1.0 else "info"
+                getattr(logger, level)(
+                    f"[latency] chunk gen {gen_time*1000:.0f}ms / budget "
+                    f"{chunk_budget*1000:.0f}ms (RTF {rtf:.2f}, "
+                    f"queue depth {len(self.playback_queue)})"
+                )
+
             except Exception as e:
                 logger.error(f"Inference error: {e}")
 
@@ -198,12 +209,18 @@ class WebRTCSyncPusher(FrameProcessor):
 
 async def main():
     try:
-        url = 'wss://chatgptme-sp76gr03.livekit.cloud'
-        api_key = 'API6pGtbWcmZpMs'
-        api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA = 'dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA'
-        room_name = 'soulx-flashhead-room'
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
 
-        token = api.AccessToken(api_key, api_dlXcUvEGjHF7Q6btM2nAefWojeK5YgS82AxKBt6U9ncA) \
+        url = os.environ["LIVEKIT_URL"]
+        api_key = os.environ["LIVEKIT_API_KEY"]
+        api_secret = os.environ["LIVEKIT_API_SECRET"]
+        room_name = os.environ.get("LIVEKIT_ROOM", "soulx-flashhead-room")
+
+        token = api.AccessToken(api_key, api_secret) \
             .with_identity('soulx-video-bot') \
             .with_name('SoulX Avatar') \
             .with_grants(api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True)) \
@@ -223,15 +240,20 @@ async def main():
             )
         )
         
-        logger.info("Loading heavy SoulX Model into VRAM... This may take a minute.")
+        model_type = os.environ.get("SOULX_MODEL_TYPE", "pro")
+        ckpt_dir = os.environ.get("SOULX_CKPT_DIR", "models/SoulX-FlashHead-1_3B")
+        wav2vec_dir = os.environ.get("SOULX_WAV2VEC_DIR", "models/wav2vec2-base-960h")
+        cond_image = os.environ.get("SOULX_COND_IMAGE", "examples/omani_character.png")
+
+        logger.info(f"Loading SoulX Model ({model_type}) into VRAM... This may take a minute.")
         model_pipeline = get_pipeline(
-            world_size=1, 
-            ckpt_dir="models/SoulX-FlashHead-1_3B", 
-            wav2vec_dir="models/wav2vec2-base-960h", 
-            model_type="lite"
+            world_size=1,
+            ckpt_dir=ckpt_dir,
+            wav2vec_dir=wav2vec_dir,
+            model_type=model_type
         )
-        
-        get_base_data(model_pipeline, cond_image_path_or_dir="examples/omani_character.png", base_seed=42, use_face_crop=False)
+
+        get_base_data(model_pipeline, cond_image_path_or_dir=cond_image, base_seed=42, use_face_crop=False)
         
         logger.info("Pre-warming the GPU to build CUDA graphs. This will take ~30-40 seconds...")
         infer_params = get_infer_params()

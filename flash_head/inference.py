@@ -1,4 +1,5 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+import os
 import yaml
 import torch
 import copy
@@ -7,7 +8,20 @@ from loguru import logger
 from flash_head.src.pipeline.flash_head_pipeline import FlashHeadPipeline
 from flash_head.src.distributed.usp_device import get_device, get_parallel_degree
 
-with open("flash_head/configs/infer_params.yaml", "r") as f:
+# Latency profile selection: FLASH_HEAD_PROFILE=default|balanced|lowlat,
+# or FLASH_HEAD_CONFIG=<path> for an explicit file.
+_PROFILE_FILES = {
+    "default": "flash_head/configs/infer_params.yaml",
+    "balanced": "flash_head/configs/infer_params_balanced.yaml",
+    "lowlat": "flash_head/configs/infer_params_lowlat.yaml",
+}
+_config_path = os.environ.get(
+    "FLASH_HEAD_CONFIG",
+    _PROFILE_FILES.get(os.environ.get("FLASH_HEAD_PROFILE", "default"),
+                       _PROFILE_FILES["default"]),
+)
+logger.info(f"[flash_head] loading inference config: {_config_path}")
+with open(_config_path, "r") as f:
     infer_params = yaml.safe_load(f)
 
 def get_pipeline(world_size, ckpt_dir, model_type, wav2vec_dir):

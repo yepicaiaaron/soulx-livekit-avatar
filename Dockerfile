@@ -44,13 +44,24 @@ RUN pip install --no-cache-dir flash_attn==2.8.0.post2 --no-build-isolation || \
 # Install Pipecat and LiveKit
 RUN pip install --no-cache-dir -r requirements_pipecat.txt
 
+# Optional: FlashAttention 3 for Hopper/Blackwell (YEP-49). Long compile —
+# enabled via: docker build --build-arg INSTALL_FA3=1 .
+ARG INSTALL_FA3=0
+RUN if [ "$INSTALL_FA3" = "1" ]; then \
+      git clone --depth 1 https://github.com/Dao-AILab/flash-attention.git /tmp/fa && \
+      cd /tmp/fa/hopper && MAX_JOBS=8 pip install --no-cache-dir . --no-build-isolation && \
+      rm -rf /tmp/fa; \
+    fi
+
 # Copy application code
-COPY bot.py run_bot.sh ./
+COPY webrtc_sync.py ./
 COPY flash_head/ ./flash_head/
 COPY examples/ ./examples/
+COPY bench/ ./bench/
+COPY tests/ ./tests/
+COPY deploy/ ./deploy/
 
-# Make scripts executable
-RUN chmod +x run_bot.sh
+RUN chmod +x deploy/live_test.sh && pip install --no-cache-dir pytest
 
 # Create directories for models (will be mounted as volumes)
 RUN mkdir -p /app/models
@@ -60,4 +71,4 @@ ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
 
 # Default command
-CMD ["python", "bot.py"]
+CMD ["python", "webrtc_sync.py"]
