@@ -17,12 +17,14 @@ cd "$(dirname "$0")/.."
 
 PROFILE="lowlat"
 SKIP_QUALITY=0
+BENCH_ONLY=0
 for arg in "$@"; do
   case $arg in
     --profile) ;; # value read next iteration via shift-less parse below
     --profile=*) PROFILE="${arg#*=}" ;;
     balanced|default|lowlat) PROFILE="$arg" ;;
     --skip-quality) SKIP_QUALITY=1 ;;
+    --bench-only) BENCH_ONLY=1 ;;  # run gates 0-4, skip live launch (no LiveKit needed)
   esac
 done
 
@@ -35,11 +37,16 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA unavailable'; import triton; print('torch', torch.__version__, '| triton', triton.__version__)"
 [ -e "models/SoulX-FlashHead-1_3B" ] || { echo "FATAL: models/SoulX-FlashHead-1_3B missing (see README symlinks)"; exit 1; }
 [ -e "models/wav2vec2-base-960h" ] || { echo "FATAL: models/wav2vec2-base-960h missing"; exit 1; }
-[ -f ".env" ] || { echo "FATAL: .env missing (copy .env.example)"; exit 1; }
-set -a; source .env; set +a
-: "${LIVEKIT_URL:?FATAL: LIVEKIT_URL not set in .env}"
-: "${LIVEKIT_API_KEY:?FATAL: LIVEKIT_API_KEY not set}"
-: "${LIVEKIT_API_SECRET:?FATAL: LIVEKIT_API_SECRET not set}"
+if [ "$SOULX_MODEL_TYPE" = "pro" ]; then
+  [ -f "models/vae/lightvaew2_1.pth" ] || { echo "FATAL: models/vae/lightvaew2_1.pth missing (hf download lightx2v/Autoencoders lightvaew2_1.pth)"; exit 1; }
+fi
+if [ "$BENCH_ONLY" -eq 0 ]; then
+  [ -f ".env" ] || { echo "FATAL: .env missing (copy .env.example)"; exit 1; }
+  set -a; source .env; set +a
+  : "${LIVEKIT_URL:?FATAL: LIVEKIT_URL not set in .env}"
+  : "${LIVEKIT_API_KEY:?FATAL: LIVEKIT_API_KEY not set}"
+  : "${LIVEKIT_API_SECRET:?FATAL: LIVEKIT_API_SECRET not set}"
+fi
 
 echo "=== [1/5] unit + smoke tests ==="
 python3 -m pytest tests/ -q
@@ -67,6 +74,11 @@ if ! python3 bench/bench_latency.py; then
   else
     exit 1
   fi
+fi
+
+if [ "$BENCH_ONLY" -eq 1 ]; then
+  echo "=== [5/5] SKIPPED (--bench-only). All gates passed at profile=$FLASH_HEAD_PROFILE ==="
+  exit 0
 fi
 
 echo "=== [5/5] launching live bot (profile=$FLASH_HEAD_PROFILE) ==="
