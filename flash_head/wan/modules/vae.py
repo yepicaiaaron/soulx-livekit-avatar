@@ -930,9 +930,17 @@ def _video_vae(
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
     """
+    # Load the checkpoint first and infer the channel width from it:
+    # decoder.conv1 out-channels == dim * dim_mult[-1]. This lets the same
+    # loader handle both the full Wan2.1 VAE (dim=96) and quarter-width
+    # distillations like LightX2V's lightvaew2_1.pth (dim=24).
+    sd = torch.load(pretrained_path, map_location=device)
+    dim_mult = kwargs.get("dim_mult", [1, 2, 4, 4])
+    inferred_dim = sd["decoder.conv1.weight"].shape[0] // dim_mult[-1]
+
     # params
     cfg = dict(
-        dim=96,
+        dim=inferred_dim,
         z_dim=z_dim,
         dim_mult=[1, 2, 4, 4],
         num_res_blocks=2,
@@ -947,7 +955,7 @@ def _video_vae(
         model = WanVAE_(**cfg)
 
     # load checkpoint
-    model.load_state_dict(torch.load(pretrained_path, map_location=device), assign=True)
+    model.load_state_dict(sd, assign=True)
 
     return model
 

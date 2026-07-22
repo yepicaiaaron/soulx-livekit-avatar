@@ -92,8 +92,12 @@ class FlashHeadPipeline:
                 device=self.device,
             )
         else:
-            vae_path = "models/vae/lightvaew2_1.pth"
-            
+            vae_path = os.environ.get("SOULX_VAE_PATH", "models/vae/lightvaew2_1.pth")
+            if not os.path.exists(vae_path):
+                fallback = os.path.join(checkpoint_dir, "VAE_Wan", "Wan2.1_VAE.pth")
+                logger.warning(f"VAE {vae_path} missing; falling back to {fallback}")
+                vae_path = fallback
+
             from flash_head.wan.modules import WanVAE
             self.vae = WanVAE(
                 vae_path=vae_path,
