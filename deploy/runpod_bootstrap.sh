@@ -53,6 +53,7 @@ export FLASH_HEAD_PROFILE="${FLASH_HEAD_PROFILE:-lowlat}"
 if [ "${LIVE:-0}" = "1" ] && [ "${SKIP_GATES:-0}" = "1" ]; then
   # Demo fast path: gates already validated on this host class this session.
   echo "=== [bootstrap] SKIP_GATES=1 — launching live bot directly ==="
+  python3 deploy/mint_token.py aaron > /workspace/join_url.txt 2>/dev/null || true
   exec python3 webrtc_sync.py
 elif [ "${LIVE:-0}" = "1" ]; then
   echo "=== [bootstrap] running gated suite (live) ==="
