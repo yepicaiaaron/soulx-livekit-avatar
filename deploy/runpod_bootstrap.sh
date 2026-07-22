@@ -48,11 +48,16 @@ mkdir -p models/vae
   hf download lightx2v/Autoencoders lightvaew2_1.pth --local-dir models/vae
 du -sh models/* || true
 
-echo "=== [bootstrap] running gated suite ==="
 export SOULX_MODEL_TYPE="${SOULX_MODEL_TYPE:-pro}"
 export FLASH_HEAD_PROFILE="${FLASH_HEAD_PROFILE:-lowlat}"
-if [ "${LIVE:-0}" = "1" ]; then
+if [ "${LIVE:-0}" = "1" ] && [ "${SKIP_GATES:-0}" = "1" ]; then
+  # Demo fast path: gates already validated on this host class this session.
+  echo "=== [bootstrap] SKIP_GATES=1 — launching live bot directly ==="
+  exec python3 webrtc_sync.py
+elif [ "${LIVE:-0}" = "1" ]; then
+  echo "=== [bootstrap] running gated suite (live) ==="
   exec ./deploy/live_test.sh
 else
+  echo "=== [bootstrap] running gated suite ==="
   ./deploy/live_test.sh --bench-only
 fi

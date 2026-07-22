@@ -41,9 +41,10 @@ if [ "$SOULX_MODEL_TYPE" = "pro" ]; then
   [ -f "models/vae/lightvaew2_1.pth" ] || { echo "FATAL: models/vae/lightvaew2_1.pth missing (hf download lightx2v/Autoencoders lightvaew2_1.pth)"; exit 1; }
 fi
 if [ "$BENCH_ONLY" -eq 0 ]; then
-  [ -f ".env" ] || { echo "FATAL: .env missing (copy .env.example)"; exit 1; }
-  set -a; source .env; set +a
-  : "${LIVEKIT_URL:?FATAL: LIVEKIT_URL not set in .env}"
+  if [ -z "${LIVEKIT_URL:-}" ] && [ -f ".env" ]; then
+    set -a; source .env; set +a
+  fi
+  : "${LIVEKIT_URL:?FATAL: LIVEKIT_URL not set (env or .env)}"
   : "${LIVEKIT_API_KEY:?FATAL: LIVEKIT_API_KEY not set}"
   : "${LIVEKIT_API_SECRET:?FATAL: LIVEKIT_API_SECRET not set}"
 fi
