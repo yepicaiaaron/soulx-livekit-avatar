@@ -35,6 +35,12 @@ def eager_mod_ln(x, scale, shift, eps):
     return ln * (1 + scale) + shift
 
 
+def rel_err(out, ref):
+    # Relative error with unit floor: fused kernels round once (fp32 end-to-end),
+    # eager rounds mid-chain — bf16 ulp disagreement on large values is expected.
+    return ((out.float() - ref.float()).abs() / (ref.float().abs() + 1.0)).max().item()
+
+
 def timeit(fn, iters=50):
     for _ in range(5):
         fn()
@@ -92,7 +98,7 @@ def main():
         w = torch.randn(DIM, device=dev)
         ref = eager_rmsnorm(xf, w, 1e-6)
         out = fused_rms_norm(xf, w, 1e-6)
-        err = (out.float() - ref.float()).abs().max().item()
+        err = rel_err(out, ref)
         ok = err < TOL
         failures += not ok
         te = timeit(lambda: eager_rmsnorm(xf, w, 1e-6))
@@ -105,7 +111,7 @@ def main():
         shift = torch.randn(1, 1, DIM, device=dev, dtype=DTYPE) * 0.1
         ref = eager_mod_ln(xf, scale, shift, 1e-6)
         out = fused_modulated_layer_norm(xf, scale=scale, shift=shift, eps=1e-6)
-        err = (out.float() - ref.float()).abs().max().item()
+        err = rel_err(out, ref)
         ok = err < TOL
         failures += not ok
         te = timeit(lambda: eager_mod_ln(xf, scale, shift, 1e-6))

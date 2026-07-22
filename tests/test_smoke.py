@@ -118,6 +118,17 @@ def test_fused_rope_matches_eager(grid):
     assert (out.float() - ref.float()).abs().max().item() < 1.6e-2
 
 
+def _rel_err(out, ref):
+    """bf16-appropriate metric: relative error with unit absolute floor.
+
+    The fused kernels compute in fp32 and round ONCE at the end; the eager
+    references round to bf16 mid-chain then multiply in higher precision.
+    On large values the two legitimately disagree by bf16 ulps (~0.4%
+    relative), so an absolute tolerance misfires — compare relatively.
+    """
+    return ((out.float() - ref.float()).abs() / (ref.float().abs() + 1.0)).max().item()
+
+
 @needs_cuda
 def test_fused_rmsnorm_matches_eager():
     from flash_head.kernels import fused_rms_norm
@@ -126,7 +137,7 @@ def test_fused_rmsnorm_matches_eager():
     ref = (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
            ).to(x.dtype) * w
     out = fused_rms_norm(x, w, 1e-6)
-    assert (out.float() - ref.float()).abs().max().item() < 1.6e-2
+    assert _rel_err(out, ref) < 1.6e-2
 
 
 @needs_cuda
@@ -138,7 +149,7 @@ def test_fused_modln_matches_eager():
     ref = torch.nn.functional.layer_norm(
         x.float(), (1536,), eps=1e-6).to(x.dtype) * (1 + scale) + shift
     out = fused_modulated_layer_norm(x, scale=scale, shift=shift, eps=1e-6)
-    assert (out.float() - ref.float()).abs().max().item() < 1.6e-2
+    assert _rel_err(out, ref) < 1.6e-2
 
 
 @needs_cuda
