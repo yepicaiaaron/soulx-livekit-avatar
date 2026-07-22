@@ -13,10 +13,25 @@ echo "=== [bootstrap] system deps ==="
 apt-get update -qq && apt-get install -y -qq ffmpeg libsndfile1 libgl1 libglib2.0-0 > /dev/null
 
 echo "=== [bootstrap] python deps ==="
-pip install --no-cache-dir -q -r requirements.txt
+# Filter pins that fight the image's torch build (torch ships its own nccl;
+# xformers is unused by the bench path).
+grep -vE '^(nvidia-nccl-cu12|xformers)' requirements.txt > /tmp/req_bench.txt
+pip install --no-cache-dir -q -r /tmp/req_bench.txt
 pip install --no-cache-dir -q pytest "huggingface_hub[cli]" pyyaml
-pip install --no-cache-dir -q flash_attn --no-build-isolation || \
-  echo "WARN: flash-attn 2 unavailable; dispatch will fall back (sage/sdpa)"
+
+# Attention backends, best-effort and never source-building (a source build
+# of flash-attn stalls a fresh pod for an hour):
+pip install --no-cache-dir -q sageattention || true
+PYTAG=$(python3 -c 'import sys;print(f"cp{sys.version_info[0]}{sys.version_info[1]}")')
+TORCHTAG=$(python3 -c 'import torch;v=torch.__version__.split("+")[0].split(".");print(f"torch{v[0]}.{v[1]}")')
+FA_OK=0
+for FA_VER in 2.8.2 2.8.0.post2; do
+  for ABI in TRUE FALSE; do
+    W="https://github.com/Dao-AILab/flash-attention/releases/download/v${FA_VER}/flash_attn-${FA_VER}+cu12${TORCHTAG}cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
+    if pip install --no-cache-dir -q "$W" 2>/dev/null; then FA_OK=1; break 2; fi
+  done
+done
+[ "$FA_OK" = "1" ] || echo "WARN: no prebuilt flash-attn wheel; dispatch falls back to sage/sdpa"
 if [ "${LIVE:-0}" = "1" ]; then
   pip install --no-cache-dir -q -r requirements_pipecat.txt
 fi
