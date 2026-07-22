@@ -47,7 +47,9 @@ def get_pipeline(world_size, ckpt_dir, model_type, wav2vec_dir):
     if model_type == "pretrained":
         infer_params['sample_steps'] = 20
     else:
-        infer_params['sample_steps'] = 4
+        # FLASH_HEAD_STEPS=2 halves denoise cost per chunk (timesteps [1000,500]);
+        # quantify the quality cost with bench_quality before shipping it.
+        infer_params['sample_steps'] = int(os.environ.get("FLASH_HEAD_STEPS", "4"))
     return pipeline
 
 def get_base_data(pipeline, cond_image_path_or_dir, base_seed, use_face_crop):
